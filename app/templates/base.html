@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Reader Triage{% endblock %}</title>
+    <script>
+        // Apply theme immediately to prevent flash of wrong theme
+        (function() {
+            const saved = localStorage.getItem('theme');
+            if (saved === 'light') {
+                document.documentElement.classList.remove('dark');
+            } else {
+                document.documentElement.classList.add('dark');
+            }
+        })();
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
+                    },
+                    colors: {
+                        dark: {
+                            bg: 'var(--color-bg)',
+                            card: 'var(--color-card)',
+                            border: 'var(--color-border)',
+                            hover: 'var(--color-hover)',
+                        },
+                        accent: {
+                            DEFAULT: 'var(--color-accent)',
+                            dim: 'var(--color-accent-dim)',
+                            muted: 'rgba(124, 107, 245, 0.15)',
+                            subtle: 'rgba(124, 107, 245, 0.08)',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Theme color variables */
+        :root {
+            /* Light mode */
+            --color-bg: #f5f6f8;
+            --color-card: #ffffff;
+            --color-border: #e2e8f0;
+            --color-hover: #f1f5f9;
+            --color-accent: #6b5ce7;
+            --color-accent-dim: #5b4dd6;
+            --color-text-primary: #1a202c;
+            --color-text-secondary: #4a5568;
+            --color-text-muted: #718096;
+            --color-text-faint: #a0aec0;
+            --color-card-hover-bg: #f1f5f9;
+            --color-scrollbar-track: #f5f6f8;
+            --color-scrollbar-thumb: #cbd5e0;
+            --color-scrollbar-thumb-hover: #a0aec0;
+            --color-code-bg: rgba(0, 0, 0, 0.06);
+            --color-pre-code-bg: #f1f5f9;
+            --color-pre-code-text: #1a202c;
+            --color-blockquote-border: #cbd5e0;
+            --color-blockquote-text: #4a5568;
+            --color-table-border: #e2e8f0;
+            --color-table-header-bg: rgba(0, 0, 0, 0.03);
+        }
+        .dark {
+            /* Dark mode */
+            --color-bg: #111218;
+            --color-card: #1a1b24;
+            --color-border: #2d2f3d;
+            --color-hover: #22242f;
+            --color-accent: #7c6bf5;
+            --color-accent-dim: #6558cc;
+            --color-text-primary: #f3f4f6;
+            --color-text-secondary: #9ca3af;
+            --color-text-muted: #6b7280;
+            --color-text-faint: #4b5563;
+            --color-card-hover-bg: #22242f;
+            --color-scrollbar-track: #111218;
+            --color-scrollbar-thumb: #2d2f3d;
+            --color-scrollbar-thumb-hover: #33354f;
+            --color-code-bg: rgba(255, 255, 255, 0.08);
+            --color-pre-code-bg: #0d0e14;
+            --color-pre-code-text: #e2e8f0;
+            --color-blockquote-border: #4b4d60;
+            --color-blockquote-text: #9ca3af;
+            --color-table-border: #2d2f3d;
+            --color-table-header-bg: rgba(255, 255, 255, 0.04);
+        }
+
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        /* Text color overrides for light mode */
+        :root:not(.dark) .text-gray-100 { color: var(--color-text-primary) !important; }
+        :root:not(.dark) .text-gray-200 { color: var(--color-text-primary) !important; }
+        :root:not(.dark) .text-gray-300 { color: var(--color-text-secondary) !important; }
+        :root:not(.dark) .text-gray-400 { color: var(--color-text-muted) !important; }
+        :root:not(.dark) .text-gray-500 { color: var(--color-text-muted) !important; }
+        :root:not(.dark) .text-gray-600 { color: var(--color-text-faint) !important; }
+        :root:not(.dark) .text-white { color: var(--color-text-primary) !important; }
+
+        /* Placeholder text in light mode */
+        :root:not(.dark) .placeholder-gray-600::placeholder { color: #a0aec0 !important; }
+
+        /* White with opacity overrides for light mode */
+        :root:not(.dark) .bg-white\/5 { background-color: rgba(0, 0, 0, 0.05) !important; }
+        :root:not(.dark) .bg-white\/\[0\.03\] { background-color: rgba(0, 0, 0, 0.04) !important; }
+        :root:not(.dark) .bg-white\/\[0\.02\] { background-color: rgba(0, 0, 0, 0.02) !important; }
+        :root:not(.dark) .bg-white\/\[0\.07\] { background-color: rgba(0, 0, 0, 0.07) !important; }
+        :root:not(.dark) .hover\:bg-white\/5:hover { background-color: rgba(0, 0, 0, 0.05) !important; }
+        :root:not(.dark) .hover\:bg-white\/10:hover { background-color: rgba(0, 0, 0, 0.08) !important; }
+        :root:not(.dark) .border-dark-border\/50 { border-color: rgba(226, 232, 240, 0.5) !important; }
+
+        /* Score bar animation */
+        .score-bar {
+            width: 0%;
+            transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+        }
+
+        /* Card hover */
+        .article-card {
+            transition: background-color 0.15s ease, border-color 0.2s ease, transform 0.15s ease;
+        }
+        .article-card:hover {
+            background-color: var(--color-card-hover-bg);
+            border-color: rgba(124, 107, 245, 0.35);
+            transform: translateY(-1px);
+        }
+
+        /* Subtle fade-in for page content */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .fade-in {
+            animation: fadeIn 0.3s ease-out forwards;
+        }
+        .fade-in-delay-1 { animation-delay: 0.05s; opacity: 0; }
+        .fade-in-delay-2 { animation-delay: 0.1s; opacity: 0; }
+        .fade-in-delay-3 { animation-delay: 0.15s; opacity: 0; }
+        .fade-in-delay-4 { animation-delay: 0.2s; opacity: 0; }
+        .fade-in-delay-5 { animation-delay: 0.25s; opacity: 0; }
+
+        /* Scan button pulse */
+        .scan-btn {
+            transition: all 0.15s ease;
+        }
+        .scan-btn:hover {
+            box-shadow: 0 0 20px rgba(124, 107, 245, 0.2);
+        }
+
+        /* Scrollbar styling */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: var(--color-scrollbar-track);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: var(--color-scrollbar-thumb);
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--color-scrollbar-thumb-hover);
+        }
+
+        /* Chat prose overrides using CSS variables */
+        .msg-prose code { background: var(--color-code-bg) !important; }
+        .msg-prose pre code { background: var(--color-pre-code-bg) !important; color: var(--color-pre-code-text) !important; }
+        .msg-prose blockquote { border-left-color: var(--color-blockquote-border) !important; color: var(--color-blockquote-text) !important; }
+        .msg-prose hr { border-top-color: var(--color-border) !important; }
+        .msg-prose th, .msg-prose td { border-color: var(--color-table-border) !important; }
+        .msg-prose th { background: var(--color-table-header-bg) !important; }
+    </style>
+</head>
+<body class="bg-dark-bg text-gray-300 min-h-screen font-sans">
+    <nav class="bg-dark-card/80 backdrop-blur-md border-b border-dark-border sticky top-0 z-50">
+        <div class="max-w-5xl mx-auto px-6">
+            <div class="flex items-center justify-between h-12">
+                <div class="flex items-center gap-6">
+                    <a href="{{ request.scope.get('root_path', '') }}/" class="text-sm font-semibold text-white tracking-tight">Reader Triage</a>
+                    <div class="hidden sm:flex gap-1">
+                        <a href="{{ request.scope.get('root_path', '') }}/" class="text-sm text-gray-400 hover:text-white px-2.5 py-1 rounded-md hover:bg-white/5 transition-all">Dashboard</a>
+                        <a href="{{ request.scope.get('root_path', '') }}/chat" class="text-sm text-gray-400 hover:text-white px-2.5 py-1 rounded-md hover:bg-white/5 transition-all">Chat</a>
+                        <a href="{{ request.scope.get('root_path', '') }}/usage" class="text-sm text-gray-400 hover:text-white px-2.5 py-1 rounded-md hover:bg-white/5 transition-all">Usage</a>
+                    </div>
+                </div>
+                <div class="flex items-center gap-3">
+                    <span id="sync-status" class="text-xs text-gray-500 hidden sm:inline"></span>
+                    <button onclick="toggleTheme()" id="theme-toggle" class="p-1.5 rounded-md text-gray-400 hover:text-white transition-colors" title="Toggle dark/light mode">
+                        <!-- Sun icon (shown in dark mode) -->
+                        <svg id="theme-icon-sun" class="w-4 h-4 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
+                        </svg>
+                        <!-- Moon icon (shown in light mode) -->
+                        <svg id="theme-icon-moon" class="w-4 h-4 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
+                        </svg>
+                    </button>
+                    <button id="scan-btn" class="scan-btn bg-accent hover:bg-accent-dim text-white px-3.5 py-1 rounded-md text-xs font-medium flex items-center gap-2">
+                        <svg id="scan-spinner" class="animate-spin h-3 w-3 text-white hidden" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <span id="scan-btn-text">Scan Inbox</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <main class="max-w-5xl mx-auto px-6 py-8">
+        {% block content %}{% endblock %}
+    </main>
+
+    <script>
+        const ROOT_PATH = '{{ request.scope.get("root_path", "") }}';
+
+        // --- Theme Toggle ---
+        function toggleTheme() {
+            const html = document.documentElement;
+            const isDark = html.classList.toggle('dark');
+            localStorage.setItem('theme', isDark ? 'dark' : 'light');
+            updateThemeIcon();
+        }
+
+        function updateThemeIcon() {
+            const isDark = document.documentElement.classList.contains('dark');
+            document.getElementById('theme-icon-sun').classList.toggle('hidden', !isDark);
+            document.getElementById('theme-icon-moon').classList.toggle('hidden', isDark);
+        }
+
+        // Animate score bars on load + initialize theme icon
+        document.addEventListener('DOMContentLoaded', () => {
+            updateThemeIcon();
+            requestAnimationFrame(() => {
+                document.querySelectorAll('.score-bar').forEach(bar => {
+                    const target = bar.dataset.width;
+                    if (target) {
+                        bar.style.width = target + '%';
+                    }
+                });
+            });
+        });
+
+        // --- Async Scan Button ---
+        document.getElementById('scan-btn').addEventListener('click', async () => {
+            const btn = document.getElementById('scan-btn');
+            const btnText = document.getElementById('scan-btn-text');
+            const spinner = document.getElementById('scan-spinner');
+
+            btn.disabled = true;
+            btn.classList.add('opacity-50', 'cursor-not-allowed');
+            btnText.textContent = 'Scanning...';
+            spinner.classList.remove('hidden');
+
+            try {
+                const response = await fetch(ROOT_PATH + '/api/scan', { method: 'POST' });
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                const data = await response.json();
+                btnText.textContent = 'Triggered';
+                setTimeout(() => {
+                    btnText.textContent = 'Scan Inbox';
+                }, 2000);
+                // Start polling more frequently after scan trigger
+                pollSyncUntilDone();
+            } catch (err) {
+                btnText.textContent = 'Scan Failed';
+                console.error('Scan failed:', err);
+                setTimeout(() => {
+                    btnText.textContent = 'Scan Inbox';
+                }, 3000);
+            } finally {
+                spinner.classList.add('hidden');
+                btn.disabled = false;
+                btn.classList.remove('opacity-50', 'cursor-not-allowed');
+            }
+        });
+
+        // --- Sync Status Polling ---
+        async function updateSyncStatus() {
+            const statusEl = document.getElementById('sync-status');
+            try {
+                const response = await fetch(ROOT_PATH + '/api/sync-status');
+                if (!response.ok) {
+                    statusEl.textContent = '';
+                    return false;
+                }
+                const data = await response.json();
+                if (data.is_syncing) {
+                    statusEl.textContent = 'Syncing...';
+                    statusEl.classList.add('text-accent');
+                    statusEl.classList.remove('text-gray-500');
+                    return true; // still syncing
+                } else if (data.last_sync_at) {
+                    const lastSync = new Date(data.last_sync_at);
+                    const now = new Date();
+                    const diffMins = Math.floor((now - lastSync) / 60000);
+
+                    let timeAgo;
+                    if (diffMins < 1) {
+                        timeAgo = 'just now';
+                    } else if (diffMins < 60) {
+                        timeAgo = diffMins + 'm ago';
+                    } else if (diffMins < 1440) {
+                        timeAgo = Math.floor(diffMins / 60) + 'h ago';
+                    } else {
+                        timeAgo = Math.floor(diffMins / 1440) + 'd ago';
+                    }
+
+                    statusEl.textContent = 'Synced ' + timeAgo;
+                    statusEl.classList.remove('text-accent');
+                    statusEl.classList.add('text-gray-500');
+                    return false; // not syncing
+                }
+            } catch {
+                // Network error or endpoint doesn't exist - silent fail
+            }
+            return false;
+        }
+
+        // Poll rapidly after triggering a scan, then refresh articles
+        async function pollSyncUntilDone() {
+            let tries = 0;
+            const poll = setInterval(async () => {
+                tries++;
+                const syncing = await updateSyncStatus();
+                if (!syncing || tries > 60) {
+                    clearInterval(poll);
+                    if (typeof refreshArticles === 'function') {
+                        refreshArticles();
+                    } else {
+                        window.location.reload();
+                    }
+                }
+            }, 3000);
+        }
+
+        // Poll sync status every 30 seconds
+        updateSyncStatus();
+        setInterval(updateSyncStatus, 30000);
+    </script>
+</body>
+</html>

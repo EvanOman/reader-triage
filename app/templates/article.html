@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+
+{% block title %}{{ article.title }} - Reader Triage{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto">
+    <!-- Back Link -->
+    <a href="{{ request.scope.get('root_path', '') }}/" class="text-xs text-gray-500 hover:text-gray-300 transition-colors mb-6 inline-flex items-center gap-1">
+        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+        Dashboard
+    </a>
+
+    <!-- Article Header -->
+    <div class="bg-dark-card rounded-lg p-6 border border-dark-border fade-in">
+        <h1 class="text-xl font-semibold text-white leading-snug tracking-tight">{{ article.title }}</h1>
+
+        <div class="flex items-center gap-1.5 mt-3 text-xs text-gray-400 flex-wrap">
+            {% if article.author %}
+            <span>{{ article.author }}</span>
+            {% endif %}
+            {% if article.word_count %}
+            <span class="text-gray-600">/</span>
+            <span>{{ article.word_count }} words</span>
+            {% endif %}
+            {% if article.added_at %}
+            <span class="text-gray-600">/</span>
+            <span>Added {{ article.added_at|shortdate }}</span>
+            {% endif %}
+            {% if article.published_date %}
+            <span class="text-gray-600">/</span>
+            <span>Published {{ article.published_date|shortdate }}</span>
+            {% endif %}
+        </div>
+
+        {% if article.tags %}
+        <div class="flex flex-wrap gap-1.5 mt-3">
+            {% for tag_slug in article.tags %}
+            <a href="{{ request.scope.get('root_path', '') }}/?tag={{ tag_slug }}"
+               class="text-[11px] font-medium px-2 py-0.5 rounded transition-opacity hover:opacity-80"
+               style="{{ tag_styles[tag_slug] }}">
+                {{ tag_names[tag_slug] }}
+            </a>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <a href="{{ article.url }}" target="_blank" rel="noopener" class="text-xs text-accent/60 hover:text-accent transition-colors mt-3 block truncate">
+            {{ article.url }}
+        </a>
+    </div>
+
+    <!-- Score Card -->
+    <div class="bg-dark-card rounded-lg p-6 border border-dark-border mt-3 fade-in fade-in-delay-1">
+        <!-- Score header with prominent number -->
+        <div class="flex items-center justify-between mb-6">
+            <h2 class="text-xs font-medium uppercase tracking-widest text-gray-500">Score</h2>
+            <div class="flex items-baseline gap-1">
+                <span class="text-3xl font-bold tabular-nums {% if article.info_score >= 60 %}text-accent{% elif article.info_score >= 30 %}text-gray-400{% else %}text-gray-600{% endif %}">{{ article.info_score|int }}</span>
+                <span class="text-sm text-gray-600">/100</span>
+            </div>
+        </div>
+
+        <!-- Score Breakdown: unified accent color with opacity -->
+        <div class="space-y-4">
+            <div>
+                <div class="flex justify-between text-sm mb-1.5">
+                    <span class="text-gray-400">Quotability</span>
+                    <span class="text-gray-500 tabular-nums text-xs">{{ article.specificity_score }}/25</span>
+                </div>
+                <div class="h-1.5 bg-white/[0.07] rounded-full overflow-hidden">
+                    <div class="h-full bg-accent/80 rounded-full score-bar" data-width="{{ (article.specificity_score / 25 * 100)|int }}"></div>
+                </div>
+                {% if article.score_reasons and article.score_reasons|length > 0 %}
+                <p class="text-xs text-gray-500 mt-1.5 leading-relaxed">{{ article.score_reasons[0] }}</p>
+                {% endif %}
+            </div>
+
+            <div>
+                <div class="flex justify-between text-sm mb-1.5">
+                    <span class="text-gray-400">Surprise Factor</span>
+                    <span class="text-gray-500 tabular-nums text-xs">{{ article.novelty_score }}/25</span>
+                </div>
+                <div class="h-1.5 bg-white/[0.07] rounded-full overflow-hidden">
+                    <div class="h-full bg-accent/60 rounded-full score-bar" data-width="{{ (article.novelty_score / 25 * 100)|int }}"></div>
+                </div>
+                {% if article.score_reasons and article.score_reasons|length > 1 %}
+                <p class="text-xs text-gray-500 mt-1.5 leading-relaxed">{{ article.score_reasons[1] }}</p>
+                {% endif %}
+            </div>
+
+            <div>
+                <div class="flex justify-between text-sm mb-1.5">
+                    <span class="text-gray-400">Argument Quality</span>
+                    <span class="text-gray-500 tabular-nums text-xs">{{ article.depth_score }}/25</span>
+                </div>
+                <div class="h-1.5 bg-white/[0.07] rounded-full overflow-hidden">
+                    <div class="h-full bg-accent/45 rounded-full score-bar" data-width="{{ (article.depth_score / 25 * 100)|int }}"></div>
+                </div>
+                {% if article.score_reasons and article.score_reasons|length > 2 %}
+                <p class="text-xs text-gray-500 mt-1.5 leading-relaxed">{{ article.score_reasons[2] }}</p>
+                {% endif %}
+            </div>
+
+            <div>
+                <div class="flex justify-between text-sm mb-1.5">
+                    <span class="text-gray-400">Applicable Insight</span>
+                    <span class="text-gray-500 tabular-nums text-xs">{{ article.actionability_score }}/25</span>
+                </div>
+                <div class="h-1.5 bg-white/[0.07] rounded-full overflow-hidden">
+                    <div class="h-full bg-accent/30 rounded-full score-bar" data-width="{{ (article.actionability_score / 25 * 100)|int }}"></div>
+                </div>
+                {% if article.score_reasons and article.score_reasons|length > 3 %}
+                <p class="text-xs text-gray-500 mt-1.5 leading-relaxed">{{ article.score_reasons[3] }}</p>
+                {% endif %}
+            </div>
+        </div>
+
+        {% if article.overall_assessment %}
+        <div class="mt-6 pt-5 border-t border-dark-border">
+            <h3 class="text-xs font-medium uppercase tracking-widest text-gray-500 mb-2">Assessment</h3>
+            <p class="text-sm text-gray-300 leading-relaxed">{{ article.overall_assessment }}</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Summary Card (if available) -->
+    {% if article.summary_text %}
+    <div class="bg-dark-card rounded-lg p-6 border border-dark-border mt-3 fade-in fade-in-delay-2">
+        <h2 class="text-xs font-medium uppercase tracking-widest text-gray-500 mb-4">Summary</h2>
+
+        <p class="text-sm text-gray-300 leading-relaxed mb-5">{{ article.summary_text }}</p>
+
+        {% if article.key_points and article.key_points|length > 0 %}
+        <h3 class="text-xs font-medium uppercase tracking-widest text-gray-500 mb-3">Key Points</h3>
+        <ul class="space-y-2.5">
+            {% for point in article.key_points %}
+            <li class="flex items-start gap-2.5 text-sm text-gray-400 leading-relaxed">
+                <span class="text-accent/50 mt-1.5 flex-shrink-0">
+                    <svg class="w-1.5 h-1.5 fill-current" viewBox="0 0 6 6"><circle cx="3" cy="3" r="3"/></svg>
+                </span>
+                <span>{{ point }}</span>
+            </li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

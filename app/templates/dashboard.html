@@ -1,0 +1,538 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Reader Triage{% endblock %}
+
+{% block content %}
+<div class="space-y-8">
+    <!-- Stats Row -->
+    <div class="grid grid-cols-4 gap-3 fade-in">
+        <button onclick="filterByTier(null)" class="tier-filter-btn bg-dark-card rounded-lg px-4 py-3 border transition-colors text-left {% if not active_tier %}border-accent/40{% else %}border-dark-border hover:border-dark-hover{% endif %}" data-tier="">
+            <div class="text-xl font-semibold text-white tabular-nums">{{ stats.total_articles }}</div>
+            <div class="text-xs text-gray-500 mt-0.5">Total</div>
+        </button>
+        <button onclick="filterByTier('high')" class="tier-filter-btn bg-dark-card rounded-lg px-4 py-3 border transition-colors text-left {% if active_tier == 'high' %}border-accent/40{% else %}border-dark-border hover:border-dark-hover{% endif %}" data-tier="high">
+            <div class="text-xl font-semibold text-accent tabular-nums">{{ stats.high_value_count }}</div>
+            <div class="text-xs text-gray-500 mt-0.5">High Value</div>
+        </button>
+        <button onclick="filterByTier('medium')" class="tier-filter-btn bg-dark-card rounded-lg px-4 py-3 border transition-colors text-left {% if active_tier == 'medium' %}border-accent/40{% else %}border-dark-border hover:border-dark-hover{% endif %}" data-tier="medium">
+            <div class="text-xl font-semibold text-gray-400 tabular-nums">{{ stats.medium_value_count }}</div>
+            <div class="text-xs text-gray-500 mt-0.5">Medium</div>
+        </button>
+        <button onclick="filterByTier('low')" class="tier-filter-btn bg-dark-card rounded-lg px-4 py-3 border transition-colors text-left {% if active_tier == 'low' %}border-accent/40{% else %}border-dark-border hover:border-dark-hover{% endif %}" data-tier="low">
+            <div class="text-xl font-semibold text-gray-500 tabular-nums">{{ stats.low_value_count }}</div>
+            <div class="text-xs text-gray-500 mt-0.5">Low</div>
+        </button>
+    </div>
+
+    <!-- Tag Filters -->
+    {% if available_tags %}
+    <div class="flex flex-wrap items-center gap-1.5 fade-in">
+        <button onclick="filterByTag(null)"
+            class="tag-filter-btn text-[11px] font-medium px-2.5 py-1 rounded-full transition-colors
+            {% if not active_tag %}bg-accent/20 text-accent{% else %}bg-white/5 text-gray-500 hover:text-gray-300{% endif %}"
+            data-tag="">
+            All
+        </button>
+        {% for tag in available_tags %}
+        <button onclick="filterByTag('{{ tag.slug }}')"
+            class="tag-filter-btn text-[11px] font-medium px-2.5 py-1 rounded-full transition-colors
+            {% if active_tag == tag.slug %}{% else %}bg-white/5 text-gray-500 hover:text-gray-300{% endif %}"
+            data-tag="{{ tag.slug }}"
+            {% if active_tag == tag.slug %}style="{{ tag_styles[tag.slug] }}"{% endif %}>
+            {{ tag.name }} <span class="{% if active_tag == tag.slug %}opacity-50{% else %}text-gray-600{% endif %} ml-0.5">{{ tag.count }}</span>
+        </button>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Search + Articles Section -->
+    <div>
+        <div class="flex items-center gap-3 mb-3 fade-in">
+            <h2 class="text-xs font-medium uppercase tracking-widest text-gray-500">Articles</h2>
+            <span id="search-count" class="hidden text-[11px] text-gray-500 tabular-nums"></span>
+            <div class="flex items-center gap-0.5 ml-auto bg-dark-card border border-dark-border rounded-md p-0.5">
+                <button onclick="setSort('score')" data-sort="score" class="sort-btn text-[11px] font-medium px-2 py-1 rounded transition-colors {% if not active_sort or active_sort == 'score' %}bg-accent/20 text-accent{% else %}text-gray-500 hover:text-gray-300{% endif %}">Score</button>
+                <button onclick="setSort('added')" data-sort="added" class="sort-btn text-[11px] font-medium px-2 py-1 rounded transition-colors {% if active_sort == 'added' %}bg-accent/20 text-accent{% else %}text-gray-500 hover:text-gray-300{% endif %}">Added</button>
+                <button onclick="setSort('published')" data-sort="published" class="sort-btn text-[11px] font-medium px-2 py-1 rounded transition-colors {% if active_sort == 'published' %}bg-accent/20 text-accent{% else %}text-gray-500 hover:text-gray-300{% endif %}">Published</button>
+            </div>
+            <div class="flex-1 max-w-sm relative">
+                <svg class="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                <input id="search-input" type="text" placeholder="Search articles..."
+                    class="w-full bg-dark-card border border-dark-border rounded-md pl-8 pr-3 py-1.5 text-sm text-gray-300 placeholder-gray-600 focus:outline-none focus:border-accent/40 transition-colors"
+                    autocomplete="off" spellcheck="false">
+                <span id="search-clear" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-600 hover:text-gray-400 cursor-pointer hidden text-xs">&times;</span>
+            </div>
+        </div>
+
+        {% if articles %}
+        <div id="articles-list" class="space-y-2">
+            {% for article in articles %}
+            <a href="{{ request.scope.get('root_path', '') }}/articles/{{ article.id }}" class="article-card bg-dark-card rounded-lg border border-dark-border block fade-in fade-in-delay-{{ loop.index }}">
+                <div class="px-5 py-4">
+                    <div class="flex items-start justify-between gap-6">
+                        <div class="flex-1 min-w-0">
+                            <div class="text-[15px] font-medium text-gray-100 leading-snug truncate">
+                                {{ article.title }}
+                            </div>
+                            <div class="flex items-center gap-1.5 mt-1.5 text-xs text-gray-400">
+                                {% if article.author %}
+                                <span>{{ article.author }}</span>
+                                {% endif %}
+                                {% if article.word_count %}
+                                <span class="text-gray-600">/</span>
+                                <span>{{ article.word_count }} words</span>
+                                {% endif %}
+                                {% if article.added_at %}
+                                <span class="text-gray-600">/</span>
+                                <span>Added {{ article.added_at|shortdate }}</span>
+                                {% endif %}
+                                {% if article.published_date %}
+                                <span class="text-gray-600">/</span>
+                                <span>Published {{ article.published_date|shortdate }}</span>
+                                {% endif %}
+                            </div>
+                            {% if article.tags %}
+                            <div class="flex flex-wrap gap-1 mt-1.5">
+                                {% for tag_slug in article.tags %}
+                                <span onclick="event.stopPropagation(); event.preventDefault(); filterByTag('{{ tag_slug }}')"
+                                    class="text-[10px] font-medium px-1.5 py-0.5 rounded cursor-pointer transition-opacity hover:opacity-80"
+                                    style="{{ tag_styles[tag_slug] }}">
+                                    {{ tag_names[tag_slug] }}
+                                </span>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+                        </div>
+
+                        <!-- Score: single prominent number with sub-score dots -->
+                        <div class="flex-shrink-0 flex items-center gap-3">
+                            <div class="hidden sm:flex items-center gap-2">
+                                <div class="flex flex-col items-center gap-0.5" title="Quotability: {{ article.specificity_score }}/25">
+                                    <div class="w-1 rounded-full {% if article.specificity_score >= 19 %}bg-accent h-4{% elif article.specificity_score >= 13 %}bg-accent/60 h-3{% else %}bg-accent/25 h-2{% endif %}"></div>
+                                </div>
+                                <div class="flex flex-col items-center gap-0.5" title="Surprise: {{ article.novelty_score }}/25">
+                                    <div class="w-1 rounded-full {% if article.novelty_score >= 19 %}bg-accent h-4{% elif article.novelty_score >= 13 %}bg-accent/60 h-3{% else %}bg-accent/25 h-2{% endif %}"></div>
+                                </div>
+                                <div class="flex flex-col items-center gap-0.5" title="Argument: {{ article.depth_score }}/25">
+                                    <div class="w-1 rounded-full {% if article.depth_score >= 19 %}bg-accent h-4{% elif article.depth_score >= 13 %}bg-accent/60 h-3{% else %}bg-accent/25 h-2{% endif %}"></div>
+                                </div>
+                                <div class="flex flex-col items-center gap-0.5" title="Insight: {{ article.actionability_score }}/25">
+                                    <div class="w-1 rounded-full {% if article.actionability_score >= 19 %}bg-accent h-4{% elif article.actionability_score >= 13 %}bg-accent/60 h-3{% else %}bg-accent/25 h-2{% endif %}"></div>
+                                </div>
+                            </div>
+
+                            <div class="w-10 text-right">
+                                <span class="text-lg font-semibold tabular-nums {% if article.info_score >= 60 %}text-accent{% elif article.info_score >= 30 %}text-gray-400{% else %}text-gray-600{% endif %}">{{ article.info_score|int }}</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    {% if article.overall_assessment %}
+                    <p class="mt-2.5 text-xs text-gray-400 leading-relaxed line-clamp-2">{{ article.overall_assessment }}</p>
+                    {% endif %}
+
+                    <div class="flex items-center gap-3 mt-2.5">
+                        <span class="text-xs text-accent/70 hover:text-accent transition-colors" onclick="event.preventDefault(); window.open('{{ article.url }}', '_blank')">
+                            Read Original
+                        </span>
+                        {% if article.has_summary %}
+                        <span class="text-[10px] uppercase tracking-wider text-gray-600 bg-white/[0.03] px-1.5 py-0.5 rounded">Summary</span>
+                        {% endif %}
+                    </div>
+                </div>
+            </a>
+            {% endfor %}
+        </div>
+
+        <!-- Load More Button -->
+        <div id="load-more-container" class="mt-6 text-center">
+            <button id="load-more-btn" class="bg-dark-card hover:bg-dark-hover text-gray-400 hover:text-white px-6 py-2 rounded-lg text-xs font-medium border border-dark-border transition-colors inline-flex items-center gap-2">
+                <svg id="load-more-spinner" class="animate-spin h-3 w-3 hidden" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <span id="load-more-text">Load More</span>
+            </button>
+        </div>
+        {% else %}
+        <div class="bg-dark-card rounded-lg p-12 border border-dark-border text-center fade-in">
+            <p class="text-gray-500 text-sm mb-4">No articles scored yet.</p>
+            <button onclick="document.getElementById('scan-btn').click()" class="bg-accent hover:bg-accent-dim text-white px-4 py-2 rounded-md text-sm font-medium transition-colors">
+                Scan Your Inbox
+            </button>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+    const ARTICLES_ROOT = '{{ request.scope.get("root_path", "") }}';
+    const PAGE_SIZE = 30;
+    const TAG_NAMES = {{ tag_names_json|safe }};
+    const TAG_COLORS = {{ tag_colors_json|safe }};
+
+    const COLOR_MAP = {
+        blue:    { bg: 'rgba(59,130,246,0.15)',  text: '#93c5fd' },
+        indigo:  { bg: 'rgba(99,102,241,0.15)',  text: '#a5b4fc' },
+        red:     { bg: 'rgba(239,68,68,0.15)',   text: '#fca5a5' },
+        cyan:    { bg: 'rgba(6,182,212,0.15)',    text: '#67e8f9' },
+        violet:  { bg: 'rgba(139,92,246,0.15)',   text: '#c4b5fd' },
+        sky:     { bg: 'rgba(14,165,233,0.15)',   text: '#7dd3fc' },
+        teal:    { bg: 'rgba(20,184,166,0.15)',   text: '#5eead4' },
+        amber:   { bg: 'rgba(245,158,11,0.15)',   text: '#fcd34d' },
+        emerald: { bg: 'rgba(16,185,129,0.15)',   text: '#6ee7b7' },
+        orange:  { bg: 'rgba(249,115,22,0.15)',   text: '#fdba74' },
+        lime:    { bg: 'rgba(132,204,22,0.15)',   text: '#bef264' },
+        yellow:  { bg: 'rgba(234,179,8,0.15)',    text: '#fde047' },
+        rose:    { bg: 'rgba(244,63,94,0.15)',    text: '#fda4af' },
+        green:   { bg: 'rgba(34,197,94,0.15)',    text: '#86efac' },
+        slate:   { bg: 'rgba(148,163,184,0.15)',  text: '#cbd5e1' },
+        fuchsia: { bg: 'rgba(217,70,239,0.15)',   text: '#f0abfc' },
+        pink:    { bg: 'rgba(236,72,153,0.15)',   text: '#f9a8d4' },
+    };
+    const FALLBACK_COLOR = { bg: 'rgba(124,107,245,0.15)', text: '#a5a0f3' };
+
+    function tagStyle(slug) {
+        const colorName = TAG_COLORS[slug];
+        const c = COLOR_MAP[colorName] || FALLBACK_COLOR;
+        return `background:${c.bg}; color:${c.text}`;
+    }
+
+    // --- State ---
+    let allArticles = [];       // Full dataset (loaded once from API)
+    let dataReady = false;      // True once allArticles is populated
+    let activeTag = {{ ("'" + active_tag + "'")|safe if active_tag else 'null' }};
+    let activeTier = {{ ("'" + active_tier + "'")|safe if active_tier else 'null' }};
+    let activeSort = '{{ active_sort or "score" }}';
+    let searchQuery = '';
+    let visibleCount = PAGE_SIZE;
+
+    // --- Helpers ---
+    function escapeHtml(text) {
+        if (!text) return '';
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    function barLevel(score) {
+        if (score >= 19) return { cls: 'bg-accent', h: 'h-4' };
+        if (score >= 13) return { cls: 'bg-accent/60', h: 'h-3' };
+        return { cls: 'bg-accent/25', h: 'h-2' };
+    }
+
+    function formatDate(dateStr) {
+        if (!dateStr) return '';
+        const d = new Date(dateStr);
+        const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        const now = new Date();
+        if (d.getFullYear() === now.getFullYear()) {
+            return months[d.getMonth()] + ' ' + d.getDate();
+        }
+        return months[d.getMonth()] + ' ' + d.getDate() + ', ' + d.getFullYear();
+    }
+
+    function createArticleCard(a) {
+        const scoreColor = a.info_score >= 60 ? 'text-accent' : (a.info_score >= 30 ? 'text-gray-400' : 'text-gray-600');
+        const authorHtml = a.author ? `<span>${escapeHtml(a.author)}</span>` : '';
+        const wordCountHtml = a.word_count ? `<span class="text-gray-600">/</span><span>${a.word_count} words</span>` : '';
+        const addedHtml = a.added_at ? `<span class="text-gray-600">/</span><span>Added ${formatDate(a.added_at)}</span>` : '';
+        const publishedHtml = a.published_date ? `<span class="text-gray-600">/</span><span>Published ${formatDate(a.published_date)}</span>` : '';
+        const assessmentHtml = a.overall_assessment ? `<p class="mt-2.5 text-xs text-gray-400 leading-relaxed line-clamp-2">${escapeHtml(a.overall_assessment)}</p>` : '';
+        const summaryBadge = a.has_summary ? '<span class="text-[10px] uppercase tracking-wider text-gray-600 bg-white/[0.03] px-1.5 py-0.5 rounded">Summary</span>' : '';
+        const tagsHtml = (a.tags || []).length > 0 ? `<div class="flex flex-wrap gap-1 mt-1.5">${(a.tags || []).map(slug =>
+            `<span onclick="event.stopPropagation(); event.preventDefault(); filterByTag('${slug}')"
+                class="text-[10px] font-medium px-1.5 py-0.5 rounded cursor-pointer transition-opacity hover:opacity-80"
+                style="${tagStyle(slug)}">${TAG_NAMES[slug] || slug}</span>`
+        ).join('')}</div>` : '';
+
+        const q = barLevel(a.specificity_score);
+        const s = barLevel(a.novelty_score);
+        const ar = barLevel(a.depth_score);
+        const ins = barLevel(a.actionability_score);
+
+        const el = document.createElement('a');
+        el.href = `${ARTICLES_ROOT}/articles/${a.id}`;
+        el.className = 'article-card bg-dark-card rounded-lg border border-dark-border block';
+        el.innerHTML = `
+            <div class="px-5 py-4">
+                <div class="flex items-start justify-between gap-6">
+                    <div class="flex-1 min-w-0">
+                        <div class="text-[15px] font-medium text-gray-100 leading-snug truncate">${escapeHtml(a.title)}</div>
+                        <div class="flex items-center gap-1.5 mt-1.5 text-xs text-gray-400">${authorHtml}${wordCountHtml}${addedHtml}${publishedHtml}</div>
+                        ${tagsHtml}
+                    </div>
+                    <div class="flex-shrink-0 flex items-center gap-3">
+                        <div class="hidden sm:flex items-center gap-2">
+                            <div class="flex flex-col items-center gap-0.5" title="Quotability: ${a.specificity_score}/25"><div class="w-1 rounded-full ${q.cls} ${q.h}"></div></div>
+                            <div class="flex flex-col items-center gap-0.5" title="Surprise: ${a.novelty_score}/25"><div class="w-1 rounded-full ${s.cls} ${s.h}"></div></div>
+                            <div class="flex flex-col items-center gap-0.5" title="Argument: ${a.depth_score}/25"><div class="w-1 rounded-full ${ar.cls} ${ar.h}"></div></div>
+                            <div class="flex flex-col items-center gap-0.5" title="Insight: ${a.actionability_score}/25"><div class="w-1 rounded-full ${ins.cls} ${ins.h}"></div></div>
+                        </div>
+                        <div class="w-10 text-right"><span class="text-lg font-semibold tabular-nums ${scoreColor}">${Math.round(a.info_score)}</span></div>
+                    </div>
+                </div>
+                ${assessmentHtml}
+                <div class="flex items-center gap-3 mt-2.5">
+                    <span class="text-xs text-accent/70 hover:text-accent transition-colors" onclick="event.stopPropagation(); event.preventDefault(); window.open('${escapeHtml(a.url)}', '_blank')">Read Original</span>
+                    ${summaryBadge}
+                </div>
+            </div>`;
+        return el;
+    }
+
+    // --- Client-side filtering (instant) ---
+    function getFilteredArticles() {
+        let results = allArticles;
+
+        // Tag filter
+        if (activeTag) {
+            results = results.filter(a => (a.tags || []).includes(activeTag));
+        }
+
+        // Tier filter
+        if (activeTier === 'high') {
+            results = results.filter(a => a.info_score >= 60);
+        } else if (activeTier === 'medium') {
+            results = results.filter(a => a.info_score >= 30 && a.info_score < 60);
+        } else if (activeTier === 'low') {
+            results = results.filter(a => a.info_score < 30);
+        }
+
+        // Text search (case-insensitive substring on title + author)
+        if (searchQuery) {
+            const q = searchQuery.toLowerCase();
+            const terms = q.split(/\s+/).filter(Boolean);
+            results = results.filter(a => {
+                const haystack = ((a.title || '') + ' ' + (a.author || '')).toLowerCase();
+                return terms.every(t => haystack.includes(t));
+            });
+        }
+
+        return results;
+    }
+
+    function setSort(sortKey) {
+        activeSort = sortKey;
+        updateUrl();
+        visibleCount = PAGE_SIZE;
+
+        document.querySelectorAll('.sort-btn').forEach(btn => {
+            const btnSort = btn.dataset.sort;
+            if (btnSort === activeSort) {
+                btn.classList.remove('text-gray-500', 'hover:text-gray-300');
+                btn.classList.add('bg-accent/20', 'text-accent');
+            } else {
+                btn.classList.remove('bg-accent/20', 'text-accent');
+                btn.classList.add('text-gray-500', 'hover:text-gray-300');
+            }
+        });
+
+        if (dataReady) renderArticles();
+    }
+
+    function renderArticles() {
+        const list = document.getElementById('articles-list');
+        const container = document.getElementById('load-more-container');
+        if (!list) return;
+
+        const filtered = sortArticles(getFilteredArticles());
+        const toShow = filtered.slice(0, visibleCount);
+
+        list.innerHTML = '';
+        for (const a of toShow) {
+            list.appendChild(createArticleCard(a));
+        }
+
+        // Show/hide load more
+        if (container) {
+            const hasMore = filtered.length > visibleCount;
+            container.classList.toggle('hidden', !hasMore);
+            const btnText = document.getElementById('load-more-text');
+            if (btnText && hasMore) {
+                btnText.textContent = `Show More (${filtered.length - visibleCount} remaining)`;
+            }
+        }
+
+        // Show result count when searching
+        const countEl = document.getElementById('search-count');
+        if (countEl) {
+            if (searchQuery || activeTag || activeTier) {
+                countEl.textContent = `${filtered.length} result${filtered.length !== 1 ? 's' : ''}`;
+                countEl.classList.remove('hidden');
+            } else {
+                countEl.classList.add('hidden');
+            }
+        }
+    }
+
+    function sortArticles(articles) {
+        const sorted = [...articles];
+        if (activeSort === 'added') {
+            sorted.sort((a, b) => {
+                const da = a.added_at ? new Date(a.added_at).getTime() : 0;
+                const db = b.added_at ? new Date(b.added_at).getTime() : 0;
+                return db - da;
+            });
+        } else if (activeSort === 'published') {
+            sorted.sort((a, b) => {
+                const da = a.published_date ? new Date(a.published_date).getTime() : 0;
+                const db = b.published_date ? new Date(b.published_date).getTime() : 0;
+                return db - da;
+            });
+        } else {
+            sorted.sort((a, b) => {
+                if (b.info_score !== a.info_score) return b.info_score - a.info_score;
+                return (b.priority_score || 0) - (a.priority_score || 0);
+            });
+        }
+        return sorted;
+    }
+
+    function updateUrl() {
+        const url = new URL(window.location);
+        if (activeTag) { url.searchParams.set('tag', activeTag); } else { url.searchParams.delete('tag'); }
+        if (activeTier) { url.searchParams.set('tier', activeTier); } else { url.searchParams.delete('tier'); }
+        if (activeSort && activeSort !== 'score') { url.searchParams.set('sort', activeSort); } else { url.searchParams.delete('sort'); }
+        window.history.replaceState({}, '', url);
+    }
+
+    // --- Filter actions ---
+    function filterByTag(tagSlug) {
+        if (tagSlug && tagSlug === activeTag) {
+            activeTag = null;
+        } else {
+            activeTag = tagSlug;
+        }
+        updateUrl();
+        visibleCount = PAGE_SIZE;
+
+        // Update button styles
+        document.querySelectorAll('.tag-filter-btn').forEach(btn => {
+            const btnTag = btn.dataset.tag;
+            const isActive = btnTag === (activeTag || '');
+            if (isActive && btnTag) {
+                btn.style.cssText = tagStyle(btnTag);
+                btn.classList.remove('bg-white/5', 'text-gray-500', 'hover:text-gray-300');
+            } else if (isActive && !btnTag) {
+                btn.style.cssText = '';
+                btn.classList.remove('bg-white/5', 'text-gray-500', 'hover:text-gray-300');
+                btn.classList.add('bg-accent/20', 'text-accent');
+            } else {
+                btn.style.cssText = '';
+                btn.classList.remove('bg-accent/20', 'text-accent');
+                btn.classList.add('bg-white/5', 'text-gray-500', 'hover:text-gray-300');
+            }
+        });
+
+        if (dataReady) renderArticles();
+    }
+
+    function filterByTier(tier) {
+        if (tier && tier === activeTier) {
+            activeTier = null;
+        } else {
+            activeTier = tier;
+        }
+        updateUrl();
+        visibleCount = PAGE_SIZE;
+
+        document.querySelectorAll('.tier-filter-btn').forEach(btn => {
+            const btnTier = btn.dataset.tier;
+            const isActive = btnTier === (activeTier || '');
+            if (isActive) {
+                btn.classList.remove('border-dark-border', 'hover:border-dark-hover');
+                btn.classList.add('border-accent/40');
+            } else {
+                btn.classList.remove('border-accent/40');
+                btn.classList.add('border-dark-border', 'hover:border-dark-hover');
+            }
+        });
+
+        if (dataReady) renderArticles();
+    }
+
+    function loadMore() {
+        visibleCount += PAGE_SIZE;
+        renderArticles();
+    }
+
+    // Called after a scan completes to refresh the dataset
+    async function refreshArticles() {
+        try {
+            const response = await fetch(`${ARTICLES_ROOT}/api/articles?limit=500`);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            allArticles = await response.json();
+            dataReady = true;
+            renderArticles();
+        } catch (err) {
+            console.error('Failed to refresh articles:', err);
+        }
+    }
+
+    // --- Load all articles on page load ---
+    (async function preloadArticles() {
+        try {
+            const response = await fetch(`${ARTICLES_ROOT}/api/articles?limit=500`);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            allArticles = await response.json();
+            dataReady = true;
+            // Re-render only if filters/sort are active (otherwise server-rendered HTML is fine)
+            if (activeTag || activeTier || searchQuery || (activeSort && activeSort !== 'score')) {
+                renderArticles();
+            }
+        } catch (err) {
+            console.error('Failed to preload articles:', err);
+        }
+    })();
+
+    // --- Load more ---
+    const loadMoreBtn = document.getElementById('load-more-btn');
+    if (loadMoreBtn) {
+        loadMoreBtn.addEventListener('click', loadMore);
+    }
+
+    // --- Search (instant client-side) ---
+    const searchInput = document.getElementById('search-input');
+    const searchClear = document.getElementById('search-clear');
+
+    if (searchInput) {
+        searchInput.addEventListener('input', (e) => {
+            const val = e.target.value;
+            searchClear.classList.toggle('hidden', !val);
+            searchQuery = val.trim();
+            visibleCount = PAGE_SIZE;
+            if (dataReady) renderArticles();
+        });
+
+        searchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                searchInput.value = '';
+                searchQuery = '';
+                searchClear.classList.add('hidden');
+                visibleCount = PAGE_SIZE;
+                if (dataReady) renderArticles();
+            }
+        });
+    }
+
+    if (searchClear) {
+        searchClear.addEventListener('click', () => {
+            searchInput.value = '';
+            searchQuery = '';
+            searchClear.classList.add('hidden');
+            visibleCount = PAGE_SIZE;
+            if (dataReady) renderArticles();
+            searchInput.focus();
+        });
+    }
+
+    // Keyboard shortcut: / to focus search
+    document.addEventListener('keydown', (e) => {
+        if (e.key === '/' && document.activeElement !== searchInput && !e.ctrlKey && !e.metaKey) {
+            e.preventDefault();
+            searchInput.focus();
+        }
+    });
+</script>
+{% endblock %}

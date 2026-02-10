@@ -1,0 +1,737 @@
+{% extends "base.html" %}
+
+{% block title %}Chat - Reader Triage{% endblock %}
+
+{% block content %}
+<style>
+    /* Override parent main constraints for full-width chat layout */
+    main.max-w-5xl { max-width: 100% !important; padding: 0 !important; }
+
+    @media (pointer: coarse) {
+        .thread-item .delete-btn { opacity: 1; }
+    }
+
+    /* Markdown prose styling for assistant messages */
+    .msg-prose p { margin: 0.5em 0; }
+    .msg-prose p:first-child { margin-top: 0; }
+    .msg-prose p:last-child { margin-bottom: 0; }
+    .msg-prose h1, .msg-prose h2, .msg-prose h3 { font-weight: 600; margin: 0.75em 0 0.25em; }
+    .msg-prose h1 { font-size: 1.25em; }
+    .msg-prose h2 { font-size: 1.125em; }
+    .msg-prose h3 { font-size: 1em; }
+    .msg-prose ul, .msg-prose ol { margin: 0.5em 0; padding-left: 1.5em; }
+    .msg-prose li { margin: 0.25em 0; }
+    .msg-prose ul { list-style-type: disc; }
+    .msg-prose ol { list-style-type: decimal; }
+    .msg-prose code { background: rgba(255,255,255,0.08); padding: 0.15em 0.3em; border-radius: 0.25em; font-size: 0.875em; }
+    .msg-prose pre { margin: 0.5em 0; border-radius: 0.5em; overflow-x: auto; }
+    .msg-prose pre code { background: #0d0e14; color: #e2e8f0; display: block; padding: 0.75em 1em; font-size: 0.8125em; line-height: 1.6; }
+    .msg-prose blockquote { border-left: 3px solid #4b4d60; padding-left: 0.75em; margin: 0.5em 0; color: #9ca3af; }
+    .msg-prose a { color: #7c6bf5; text-decoration: underline; }
+    .msg-prose strong { font-weight: 600; }
+    .msg-prose em { font-style: italic; }
+    .msg-prose hr { border: none; border-top: 1px solid #2d2f3d; margin: 0.75em 0; }
+    .msg-prose table { border-collapse: collapse; margin: 0.5em 0; font-size: 0.875em; }
+    .msg-prose th, .msg-prose td { border: 1px solid #2d2f3d; padding: 0.375em 0.75em; }
+    .msg-prose th { background: rgba(255,255,255,0.04); font-weight: 600; }
+
+    /* Tool call card styling */
+    .tool-card { transition: all 0.2s ease; }
+    .tool-card .tool-spinner { animation: tool-spin 1s linear infinite; }
+    @keyframes tool-spin { to { transform: rotate(360deg); } }
+
+    /* Thinking dots animation */
+    .thinking-dots span {
+        animation: thinking-blink 1.4s infinite both;
+        display: inline-block;
+        font-size: 1.5em;
+        line-height: 1;
+    }
+    .thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+    .thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes thinking-blink {
+        0%, 80%, 100% { opacity: 0.2; }
+        40% { opacity: 1; }
+    }
+
+    /* Textarea auto-resize */
+    #chat-input {
+        resize: none;
+        min-height: 44px;
+        max-height: 160px;
+    }
+</style>
+
+<div class="flex" style="height: calc(100vh - 3rem)">
+
+    <!-- Mobile backdrop -->
+    <div id="sidebar-backdrop" class="hidden fixed inset-0 bg-black/50 z-30 md:hidden"></div>
+
+    <!-- Sidebar -->
+    <aside id="sidebar" class="fixed top-12 bottom-0 left-0 w-64 z-40 flex flex-col bg-dark-bg border-r border-dark-border transform -translate-x-full transition-transform duration-200 ease-in-out md:static md:translate-x-0 md:z-0 md:shrink-0">
+        <!-- New Chat button -->
+        <div class="p-3 border-b border-dark-border">
+            <button id="new-chat-btn"
+                    class="w-full px-3 py-2 text-sm rounded-lg bg-accent hover:bg-accent-dim text-white transition font-medium flex items-center justify-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd" />
+                </svg>
+                New Chat
+            </button>
+        </div>
+
+        <!-- Thread list -->
+        <div id="thread-list" class="flex-1 overflow-y-auto p-2 space-y-0.5">
+            <div id="thread-empty" class="px-3 py-4 text-center text-sm text-gray-500">
+                <p>No conversations yet.</p>
+                <p class="mt-1 text-xs text-gray-600">Click "New Chat" to start one.</p>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main chat area -->
+    <div class="flex-1 flex flex-col min-w-0">
+        <!-- Chat header -->
+        <div class="shrink-0 flex items-center gap-3 px-4 py-2 bg-dark-card border-b border-dark-border">
+            <button id="sidebar-toggle" class="md:hidden flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-dark-hover transition text-gray-400" aria-label="Toggle sidebar">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M3 5a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 15a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd" />
+                </svg>
+                <span class="text-sm font-medium text-gray-300">Chats</span>
+            </button>
+            <h1 id="chat-title" class="text-sm font-semibold text-white truncate">Article Assistant</h1>
+        </div>
+
+        <!-- Chat messages container -->
+        <div id="chat-messages" class="flex-1 overflow-y-auto p-4 space-y-4">
+            <div id="chat-placeholder" class="text-center text-gray-500 py-12">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-10 w-10 mx-auto mb-3 text-accent/40" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z" />
+                </svg>
+                <p class="text-gray-300 font-medium">Ask me about your articles</p>
+                <p class="text-sm mt-2 text-gray-500">
+                    Try: "Find articles about AI" or "What high-scoring articles do I have?"
+                </p>
+            </div>
+        </div>
+
+        <!-- Input form -->
+        <div class="shrink-0 border-t border-dark-border bg-dark-card p-3">
+            <form id="chat-form" class="flex gap-2 max-w-3xl mx-auto items-end">
+                <textarea id="chat-input"
+                       name="message"
+                       rows="1"
+                       placeholder="Ask about your articles..."
+                       class="flex-1 px-4 py-2.5 rounded-xl border border-dark-border bg-dark-bg text-gray-100 placeholder-gray-600 focus:ring-2 focus:ring-accent/40 focus:border-accent/40 focus:outline-none transition-colors"
+                       autocomplete="off"></textarea>
+                <button type="submit"
+                        id="send-button"
+                        class="px-5 py-2.5 bg-accent text-white rounded-xl font-medium hover:bg-accent-dim transition disabled:opacity-40 disabled:cursor-not-allowed text-sm">
+                    Send
+                </button>
+            </form>
+        </div>
+    </div>
+
+</div>
+
+<script type="module">
+import * as smd from 'https://cdn.jsdelivr.net/npm/streaming-markdown/smd.min.js';
+
+const ARTICLES_ROOT = '{{ request.scope.get("root_path", "") }}';
+
+const chatMessages = document.getElementById('chat-messages');
+const chatForm = document.getElementById('chat-form');
+const chatInput = document.getElementById('chat-input');
+const sendButton = document.getElementById('send-button');
+const newChatBtn = document.getElementById('new-chat-btn');
+const sidebar = document.getElementById('sidebar');
+const sidebarBackdrop = document.getElementById('sidebar-backdrop');
+const threadList = document.getElementById('thread-list');
+const chatTitle = document.getElementById('chat-title');
+
+let currentThreadId = null;
+
+// --- Scroll helpers ---
+function isNearBottom(el, threshold = 80) {
+    return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
+}
+function scrollToBottom(force = false) {
+    if (force || isNearBottom(chatMessages)) {
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+}
+
+// --- Sidebar controls ---
+function openSidebar() {
+    sidebar.classList.remove('-translate-x-full');
+    sidebar.classList.add('translate-x-0');
+    sidebarBackdrop.classList.remove('hidden');
+}
+
+function closeSidebar() {
+    sidebar.classList.add('-translate-x-full');
+    sidebar.classList.remove('translate-x-0');
+    sidebarBackdrop.classList.add('hidden');
+}
+
+document.getElementById('sidebar-toggle').addEventListener('click', () => {
+    if (sidebar.classList.contains('-translate-x-full')) {
+        openSidebar();
+    } else {
+        closeSidebar();
+    }
+});
+
+sidebarBackdrop.addEventListener('click', closeSidebar);
+
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeSidebar();
+});
+
+// --- Textarea auto-resize ---
+chatInput.addEventListener('input', () => {
+    chatInput.style.height = 'auto';
+    chatInput.style.height = Math.min(chatInput.scrollHeight, 160) + 'px';
+});
+
+// Enter to send, Shift+Enter for newline
+chatInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        chatForm.dispatchEvent(new Event('submit', { cancelable: true }));
+    }
+});
+
+// --- Message helpers ---
+function clearMessages() {
+    chatMessages.innerHTML = '';
+    const placeholder = document.createElement('div');
+    placeholder.id = 'chat-placeholder';
+    placeholder.className = 'text-center text-gray-500 py-12';
+    placeholder.innerHTML = `
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-10 w-10 mx-auto mb-3 text-accent/40" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z" />
+        </svg>
+        <p class="text-gray-300 font-medium">Ask me about your articles</p>
+        <p class="text-sm mt-2 text-gray-500">
+            Try: "Find articles about AI" or "What high-scoring articles do I have?"
+        </p>
+    `;
+    chatMessages.appendChild(placeholder);
+}
+
+function addMessage(role, content, opts = {}) {
+    const placeholder = document.getElementById('chat-placeholder');
+    if (placeholder && placeholder.parentNode) {
+        placeholder.remove();
+    }
+
+    const messageDiv = document.createElement('div');
+    messageDiv.className = role === 'user'
+        ? 'flex justify-end'
+        : 'flex justify-start';
+
+    const bubble = document.createElement('div');
+    if (role === 'user') {
+        bubble.className = 'max-w-[80%] px-4 py-2 rounded-2xl bg-accent text-white whitespace-pre-wrap text-sm';
+        bubble.textContent = content;
+    } else {
+        bubble.className = 'max-w-[80%] px-4 py-2 rounded-2xl bg-dark-card border border-dark-border text-gray-100 msg-prose text-sm';
+        if (content && !opts.streaming) {
+            // Parse content_blocks if available for historical messages with tool calls
+            if (opts.content_blocks) {
+                try {
+                    const blocks = JSON.parse(opts.content_blocks);
+                    renderContentBlocks(messageDiv, blocks, content);
+                    chatMessages.appendChild(messageDiv);
+                    scrollToBottom();
+                    return bubble;
+                } catch (_) { /* fall through to plain rendering */ }
+            }
+            const renderer = smd.default_renderer(bubble);
+            const parser = smd.parser(renderer);
+            smd.parser_write(parser, content);
+            smd.parser_end(parser);
+        }
+    }
+
+    messageDiv.appendChild(bubble);
+    chatMessages.appendChild(messageDiv);
+    scrollToBottom();
+
+    return bubble;
+}
+
+// Render content_blocks for historical assistant messages that include tool calls
+function renderContentBlocks(container, blocks, fallbackText) {
+    container.className = 'flex flex-col items-start gap-1';
+
+    for (const block of blocks) {
+        if (block.type === 'tool_use') {
+            const card = createToolCard(block.name, block.input?.query || '');
+            completeToolCard(card, block.name, '');
+            container.appendChild(card);
+        } else if (block.type === 'text' && block.text) {
+            const bubble = document.createElement('div');
+            bubble.className = 'max-w-[80%] px-4 py-2 rounded-2xl bg-dark-card border border-dark-border text-gray-100 msg-prose text-sm';
+            const renderer = smd.default_renderer(bubble);
+            const parser = smd.parser(renderer);
+            smd.parser_write(parser, block.text);
+            smd.parser_end(parser);
+            container.appendChild(bubble);
+        }
+    }
+
+    // If no text blocks were rendered, render fallback
+    if (!blocks.some(b => b.type === 'text' && b.text)) {
+        const bubble = document.createElement('div');
+        bubble.className = 'max-w-[80%] px-4 py-2 rounded-2xl bg-dark-card border border-dark-border text-gray-100 msg-prose text-sm';
+        const renderer = smd.default_renderer(bubble);
+        const parser = smd.parser(renderer);
+        smd.parser_write(parser, fallbackText);
+        smd.parser_end(parser);
+        container.appendChild(bubble);
+    }
+}
+
+function createThinkingIndicator() {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'flex justify-start';
+    wrapper.id = 'thinking-indicator';
+
+    const bubble = document.createElement('div');
+    bubble.className = 'px-4 py-2 rounded-2xl bg-dark-card border border-dark-border text-gray-400';
+    bubble.innerHTML = '<div class="thinking-dots"><span>.</span><span>.</span><span>.</span></div>';
+
+    wrapper.appendChild(bubble);
+    return wrapper;
+}
+
+function removeThinkingIndicator() {
+    const el = document.getElementById('thinking-indicator');
+    if (el) el.remove();
+}
+
+function setLoading(loading) {
+    sendButton.disabled = loading;
+    chatInput.disabled = loading;
+    sendButton.textContent = loading ? '...' : 'Send';
+}
+
+// --- Thread management ---
+function setActiveThread(threadId) {
+    currentThreadId = threadId;
+    document.querySelectorAll('.thread-item').forEach(item => {
+        const isActive = parseInt(item.dataset.threadId) === threadId;
+        if (isActive) {
+            item.classList.add('bg-dark-hover', 'text-white', 'font-medium');
+            item.classList.remove('hover:bg-dark-hover', 'text-gray-400');
+        } else {
+            item.classList.remove('bg-dark-hover', 'text-white', 'font-medium');
+            item.classList.add('hover:bg-dark-hover', 'text-gray-400');
+        }
+    });
+}
+
+function createThreadItem(threadId, title) {
+    const item = document.createElement('div');
+    item.className = 'thread-item group flex items-center gap-1 px-3 py-2 text-sm rounded-lg cursor-pointer text-gray-400 hover:bg-dark-hover transition';
+    item.dataset.threadId = threadId;
+    item.title = title;
+
+    const span = document.createElement('span');
+    span.className = 'flex-1 truncate';
+    span.textContent = title;
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'delete-btn shrink-0 p-1 rounded hover:bg-white/10 text-gray-600 hover:text-red-400 transition opacity-0 group-hover:opacity-100';
+    deleteBtn.title = 'Delete thread';
+    deleteBtn.dataset.deleteThread = threadId;
+    deleteBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+        <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
+    </svg>`;
+    deleteBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        deleteThread(threadId);
+    });
+
+    item.appendChild(span);
+    item.appendChild(deleteBtn);
+    item.addEventListener('click', () => loadThread(parseInt(item.dataset.threadId)));
+
+    return item;
+}
+
+function addThreadItem(threadId, title) {
+    if (document.querySelector(`.thread-item[data-thread-id="${threadId}"]`)) return;
+
+    const emptyMsg = document.getElementById('thread-empty');
+    if (emptyMsg) emptyMsg.remove();
+
+    const item = createThreadItem(threadId, title);
+    threadList.prepend(item);
+}
+
+async function loadThreadList() {
+    try {
+        const response = await fetch(`${ARTICLES_ROOT}/api/chat/threads`);
+        if (!response.ok) throw new Error('Failed to load threads');
+
+        const threads = await response.json();
+        threadList.innerHTML = '';
+
+        if (threads.length === 0) {
+            const emptyDiv = document.createElement('div');
+            emptyDiv.id = 'thread-empty';
+            emptyDiv.className = 'px-3 py-4 text-center text-sm text-gray-500';
+            emptyDiv.innerHTML = '<p>No conversations yet.</p><p class="mt-1 text-xs text-gray-600">Click "New Chat" to start one.</p>';
+            threadList.appendChild(emptyDiv);
+        } else {
+            for (const thread of threads) {
+                const item = createThreadItem(thread.id, thread.title);
+                threadList.appendChild(item);
+            }
+        }
+
+        // Re-highlight active thread if any
+        if (currentThreadId) {
+            setActiveThread(currentThreadId);
+        }
+    } catch (error) {
+        console.error('Error loading threads:', error);
+    }
+}
+
+async function deleteThread(threadId) {
+    if (!confirm('Delete this thread?')) return;
+
+    try {
+        const response = await fetch(`${ARTICLES_ROOT}/api/chat/threads/${threadId}`, { method: 'DELETE' });
+        if (!response.ok) throw new Error('Failed to delete thread');
+
+        const item = document.querySelector(`.thread-item[data-thread-id="${threadId}"]`);
+        if (item) item.remove();
+
+        // Show empty state if no threads remain
+        if (!document.querySelector('.thread-item')) {
+            const emptyDiv = document.createElement('div');
+            emptyDiv.id = 'thread-empty';
+            emptyDiv.className = 'px-3 py-4 text-center text-sm text-gray-500';
+            emptyDiv.innerHTML = '<p>No conversations yet.</p><p class="mt-1 text-xs text-gray-600">Click "New Chat" to start one.</p>';
+            threadList.appendChild(emptyDiv);
+        }
+
+        if (currentThreadId === threadId) {
+            currentThreadId = null;
+            chatTitle.textContent = 'Article Assistant';
+            clearMessages();
+            setActiveThread(null);
+        }
+    } catch (error) {
+        console.error('Error deleting thread:', error);
+    }
+}
+
+async function loadThread(threadId) {
+    try {
+        const response = await fetch(`${ARTICLES_ROOT}/api/chat/threads/${threadId}/messages`);
+        if (!response.ok) throw new Error('Failed to load thread');
+
+        const messages = await response.json();
+        chatMessages.innerHTML = '';
+
+        if (messages.length === 0) {
+            clearMessages();
+        } else {
+            for (const msg of messages) {
+                addMessage(msg.role, msg.content, { content_blocks: msg.content_blocks });
+            }
+        }
+
+        setActiveThread(threadId);
+
+        // Update title from thread list item
+        const threadItem = document.querySelector(`.thread-item[data-thread-id="${threadId}"]`);
+        if (threadItem) {
+            chatTitle.textContent = threadItem.title || 'Article Assistant';
+        }
+
+        if (window.innerWidth < 768) closeSidebar();
+
+        scrollToBottom(true);
+    } catch (error) {
+        console.error('Error loading thread:', error);
+    }
+}
+
+// --- New chat button ---
+newChatBtn.addEventListener('click', () => {
+    currentThreadId = null;
+    chatTitle.textContent = 'Article Assistant';
+    clearMessages();
+    setActiveThread(null);
+    chatInput.focus();
+    if (window.innerWidth < 768) closeSidebar();
+});
+
+// --- Tool call UI ---
+const TOOL_META = {
+    search_articles: {
+        label: 'Searching articles',
+        doneLabel: 'Searched articles',
+        icon: `<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd"/></svg>`,
+    },
+    get_article: {
+        label: 'Loading article',
+        doneLabel: 'Loaded article',
+        icon: `<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z"/></svg>`,
+    },
+    get_article_content: {
+        label: 'Reading article content',
+        doneLabel: 'Read article content',
+        icon: `<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path d="M9 4.804A7.968 7.968 0 005.5 4c-1.255 0-2.443.29-3.5.804v10A7.969 7.969 0 015.5 14c1.669 0 3.218.51 4.5 1.385A7.962 7.962 0 0114.5 14c1.255 0 2.443.29 3.5.804v-10A7.968 7.968 0 0014.5 4c-1.255 0-2.443.29-3.5.804V12a1 1 0 11-2 0V4.804z"/></svg>`,
+    },
+    list_tags: {
+        label: 'Loading tags',
+        doneLabel: 'Loaded tags',
+        icon: `<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M17.707 9.293a1 1 0 010 1.414l-7 7a1 1 0 01-1.414 0l-7-7A.997.997 0 012 10V5a3 3 0 013-3h5c.256 0 .512.098.707.293l7 7zM5 6a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd"/></svg>`,
+    },
+};
+
+function createToolCard(toolName, query) {
+    const meta = TOOL_META[toolName] || { label: `Using ${toolName}`, doneLabel: toolName, icon: '' };
+    const card = document.createElement('div');
+    card.className = 'tool-card flex items-center gap-2.5 px-3 py-2 my-1 rounded-lg bg-dark-bg border border-dark-border text-sm';
+    card.dataset.tool = toolName;
+
+    const iconWrap = document.createElement('div');
+    iconWrap.className = 'tool-icon shrink-0 text-accent';
+    iconWrap.innerHTML = `<svg class="tool-spinner h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>`;
+    card.appendChild(iconWrap);
+
+    const text = document.createElement('div');
+    text.className = 'tool-text flex-1 min-w-0';
+    const labelSpan = document.createElement('span');
+    labelSpan.className = 'tool-label text-gray-300 font-medium';
+    labelSpan.textContent = meta.label;
+    text.appendChild(labelSpan);
+    if (query) {
+        const querySpan = document.createElement('span');
+        querySpan.className = 'text-gray-500 ml-1.5';
+        querySpan.textContent = `"${query}"`;
+        text.appendChild(querySpan);
+    }
+    card.appendChild(text);
+
+    const status = document.createElement('div');
+    status.className = 'tool-status shrink-0 text-xs text-gray-500';
+    card.appendChild(status);
+
+    return card;
+}
+
+function completeToolCard(card, toolName, summary) {
+    const meta = TOOL_META[toolName] || { label: toolName, doneLabel: toolName, icon: '' };
+    // Replace spinner with static icon
+    const iconWrap = card.querySelector('.tool-icon');
+    if (iconWrap) {
+        iconWrap.innerHTML = meta.icon || `<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>`;
+    }
+    // Update label
+    const label = card.querySelector('.tool-label');
+    if (label) label.textContent = meta.doneLabel;
+    // Show summary
+    const status = card.querySelector('.tool-status');
+    if (status && summary) status.textContent = summary;
+    // Fade slightly to indicate completion
+    card.classList.add('opacity-70');
+}
+
+// --- Send message & SSE streaming ---
+chatForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const message = chatInput.value.trim();
+    if (!message) return;
+
+    addMessage('user', message);
+    scrollToBottom(true);
+    chatInput.value = '';
+    chatInput.style.height = 'auto';
+
+    // Show thinking indicator
+    const thinking = createThinkingIndicator();
+    chatMessages.appendChild(thinking);
+    scrollToBottom(true);
+
+    // Container for the entire assistant response (text bubbles + tool cards)
+    const responseContainer = document.createElement('div');
+    responseContainer.className = 'flex flex-col items-start gap-1';
+
+    // Create the first text bubble
+    let currentBubble = document.createElement('div');
+    currentBubble.className = 'max-w-[80%] px-4 py-2 rounded-2xl bg-dark-card border border-dark-border text-gray-100 msg-prose text-sm';
+    responseContainer.appendChild(currentBubble);
+
+    let smdRenderer = smd.default_renderer(currentBubble);
+    let smdParser = smd.parser(smdRenderer);
+    let hasTextInCurrentBubble = false;
+    let activeToolCard = null;
+    let firstTextReceived = false;
+
+    setLoading(true);
+
+    try {
+        const response = await fetch(`${ARTICLES_ROOT}/api/chat/message`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                message,
+                thread_id: currentThreadId,
+            }),
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const events = buffer.split('\n\n');
+            buffer = events.pop();
+
+            for (const event of events) {
+                if (!event.trim()) continue;
+                const lines = event.split('\n');
+                let eventType = null;
+                const dataLines = [];
+                for (const line of lines) {
+                    if (line.startsWith('event: ')) {
+                        eventType = line.slice(7).trim();
+                    } else if (line.startsWith('data: ')) {
+                        dataLines.push(line.slice(6));
+                    } else if (line === 'data:') {
+                        dataLines.push('');
+                    }
+                }
+                const data = dataLines.join('\n');
+
+                if (eventType === 'tool_use') {
+                    // Remove thinking indicator on first event
+                    if (!firstTextReceived) {
+                        removeThinkingIndicator();
+                        chatMessages.appendChild(responseContainer);
+                        firstTextReceived = true;
+                    }
+                    try {
+                        const toolData = JSON.parse(data);
+                        const query = toolData.input?.query || '';
+                        // If the current bubble has text, finalize it before showing tool card
+                        if (hasTextInCurrentBubble) {
+                            smd.parser_end(smdParser);
+                        } else {
+                            // Empty bubble before any text arrived -- hide it
+                            currentBubble.style.display = 'none';
+                        }
+                        activeToolCard = createToolCard(toolData.tool, query);
+                        responseContainer.appendChild(activeToolCard);
+                        scrollToBottom();
+                    } catch (_) { /* ignore parse errors */ }
+                } else if (eventType === 'tool_done') {
+                    try {
+                        const toolData = JSON.parse(data);
+                        if (activeToolCard) {
+                            completeToolCard(activeToolCard, toolData.tool, toolData.summary);
+                            activeToolCard = null;
+                        }
+                        // Create a fresh bubble for the next text round
+                        currentBubble = document.createElement('div');
+                        currentBubble.className = 'max-w-[80%] px-4 py-2 rounded-2xl bg-dark-card border border-dark-border text-gray-100 msg-prose text-sm';
+                        responseContainer.appendChild(currentBubble);
+                        smdRenderer = smd.default_renderer(currentBubble);
+                        smdParser = smd.parser(smdRenderer);
+                        hasTextInCurrentBubble = false;
+                        scrollToBottom();
+                    } catch (_) { /* ignore */ }
+                } else if (eventType === 'error') {
+                    removeThinkingIndicator();
+                    if (!firstTextReceived) {
+                        chatMessages.appendChild(responseContainer);
+                        firstTextReceived = true;
+                    }
+                    const warning = document.createElement('div');
+                    warning.className = 'text-xs text-amber-400 mt-1';
+                    warning.textContent = data || 'Warning: Response may not have been saved';
+                    responseContainer.appendChild(warning);
+                } else if (eventType === 'done') {
+                    removeThinkingIndicator();
+                    smd.parser_end(smdParser);
+                    // Clean up empty trailing bubble
+                    if (!hasTextInCurrentBubble) currentBubble.style.display = 'none';
+                    const threadId = parseInt(data);
+                    if (!currentThreadId && threadId) {
+                        addThreadItem(threadId, message.slice(0, 50));
+                        setActiveThread(threadId);
+                        // Update header title
+                        chatTitle.textContent = message.slice(0, 50);
+                    }
+                } else if (dataLines.length > 0) {
+                    // Remove thinking indicator on first text
+                    if (!firstTextReceived) {
+                        removeThinkingIndicator();
+                        chatMessages.appendChild(responseContainer);
+                        firstTextReceived = true;
+                    }
+                    // Text data -- skip empty round separators
+                    if (data === '\n\n' || data.trim() === '') {
+                        continue;
+                    }
+                    hasTextInCurrentBubble = true;
+                    currentBubble.style.display = '';
+                    smd.parser_write(smdParser, data);
+                    scrollToBottom();
+                }
+            }
+        }
+    } catch (error) {
+        console.error('Chat error:', error);
+        removeThinkingIndicator();
+        if (!firstTextReceived) {
+            chatMessages.appendChild(responseContainer);
+        }
+        smd.parser_end(smdParser);
+        currentBubble.innerHTML = '';
+        currentBubble.style.display = '';
+        currentBubble.textContent = 'Error: Could not get response. Please try again.';
+        currentBubble.classList.remove('msg-prose');
+        currentBubble.classList.add('text-red-400');
+    } finally {
+        setLoading(false);
+        chatInput.focus();
+    }
+});
+
+// --- Thread loading from URL parameter ---
+const urlParams = new URLSearchParams(window.location.search);
+const threadParam = urlParams.get('thread');
+
+// Load thread list on page load
+loadThreadList().then(() => {
+    if (threadParam) {
+        const threadId = parseInt(threadParam);
+        if (!isNaN(threadId)) {
+            loadThread(threadId);
+        }
+    } else {
+        chatInput.focus();
+    }
+});
+</script>
+{% endblock %}
