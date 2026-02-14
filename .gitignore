@@ -16,3 +16,4 @@ qdrant_data/
 .ruff_cache/
 coverage.xml
 htmlcov/
+.coverage

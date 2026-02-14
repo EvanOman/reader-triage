@@ -1,10 +1,12 @@
 """Tests for the chat service, focusing on unified search and tool dispatch."""
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from anthropic.types import Message, TextBlock, TextDelta, ToolUseBlock, Usage
 
-from app.services.chat import ChatService
+from app.services.chat import ChatService, _serialize_content_blocks
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -694,3 +696,886 @@ class TestExecuteTool:
         result = await svc._execute_tool("search", {"query": "x"})
         assert "error" in result
         assert "boom" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# 6. _serialize_content_blocks
+# ---------------------------------------------------------------------------
+
+
+class TestSerializeContentBlocks:
+    """Test serialization of Anthropic SDK content blocks to plain dicts."""
+
+    def test_text_block(self):
+        block = TextBlock(type="text", text="Hello world")
+        result = _serialize_content_blocks([block])
+        assert result == [{"type": "text", "text": "Hello world"}]
+
+    def test_tool_use_block(self):
+        block = ToolUseBlock(
+            type="tool_use", id="toolu_abc", name="search", input={"query": "AI"}
+        )
+        result = _serialize_content_blocks([block])
+        assert result == [
+            {
+                "type": "tool_use",
+                "id": "toolu_abc",
+                "name": "search",
+                "input": {"query": "AI"},
+            }
+        ]
+
+    def test_mixed_blocks(self):
+        blocks = [
+            TextBlock(type="text", text="Let me search"),
+            ToolUseBlock(
+                type="tool_use", id="toolu_123", name="search", input={"query": "x"}
+            ),
+        ]
+        result = _serialize_content_blocks(blocks)
+        assert len(result) == 2
+        assert result[0]["type"] == "text"
+        assert result[1]["type"] == "tool_use"
+
+    def test_dict_passthrough(self):
+        """Dict blocks are passed through as-is."""
+        block = {"type": "text", "text": "already a dict"}
+        result = _serialize_content_blocks([block])
+        assert result == [block]
+
+    def test_unknown_block_type_with_model_dump(self):
+        """Block with unknown type but model_dump method uses that."""
+        block = MagicMock()
+        block.type = "image"
+        block.model_dump = MagicMock(return_value={"type": "image", "data": "base64"})
+        result = _serialize_content_blocks([block])
+        assert result == [{"type": "image", "data": "base64"}]
+
+    def test_unknown_block_type_without_model_dump(self):
+        """Block with unknown type and no model_dump falls back to str(type)."""
+        block = MagicMock(spec=[])
+        block.type = "custom_type"
+        # spec=[] means no attributes, so hasattr(block, "model_dump") is False
+        result = _serialize_content_blocks([block])
+        assert result == [{"type": "custom_type"}]
+
+    def test_empty_list(self):
+        result = _serialize_content_blocks([])
+        assert result == []
+
+
+# ---------------------------------------------------------------------------
+# 7. _tool_get_article
+# ---------------------------------------------------------------------------
+
+
+class TestToolGetArticle:
+    """Tests for _tool_get_article."""
+
+    @pytest.mark.usefixtures("populated_db")
+    async def test_get_article_with_score(self, session_factory):
+        """Returns article details including score fields."""
+        svc = _make_service()
+        with patch(
+            "app.services.chat.get_session_factory",
+            new_callable=AsyncMock,
+            return_value=session_factory,
+        ):
+            result = await svc._tool_get_article({"article_id": "test-article-001"})
+
+        assert result["id"] == "test-article-001"
+        assert result["title"] == "The Future of AI Agents"
+        assert result["author"] == "Jane Smith"
+        assert result["info_score"] == 85
+        assert result["overall_assessment"] is not None
+        assert isinstance(result["score_reasons"], list)
+        assert result["skip_recommended"] is False
+
+    @pytest.mark.usefixtures("populated_db")
+    async def test_get_article_with_summary(self, session_factory):
+        """Returns article with summary text and key points."""
+        svc = _make_service()
+        with patch(
+            "app.services.chat.get_session_factory",
+            new_callable=AsyncMock,
+            return_value=session_factory,
+        ):
+            result = await svc._tool_get_article({"article_id": "test-article-004"})
+
+        assert result["id"] == "test-article-004"
+        assert "summary_text" in result
+        assert "weekly roundup" in result["summary_text"].lower()
+        assert "key_points" in result
+        assert isinstance(result["key_points"], list)
+
+    @pytest.mark.usefixtures("populated_db")
+    async def test_get_article_with_tags(self, session_factory):
+        """Returns article with associated tags."""
+        svc = _make_service()
+        with patch(
+            "app.services.chat.get_session_factory",
+            new_callable=AsyncMock,
+            return_value=session_factory,
+        ):
+            result = await svc._tool_get_article({"article_id": "test-article-003"})
+
+        assert result["id"] == "test-article-003"
+        assert "ai-dev-tools" in result["tags"]
+        assert "software-eng" in result["tags"]
+
+    @pytest.mark.usefixtures("populated_db")
+    async def test_get_article_not_found(self, session_factory):
+        """Non-existent article returns an error."""
+        svc = _make_service()
+        with patch(
+            "app.services.chat.get_session_factory",
+            new_callable=AsyncMock,
+            return_value=session_factory,
+        ):
+            result = await svc._tool_get_article({"article_id": "nonexistent"})
+
+        assert "error" in result
+        assert "not found" in result["error"].lower()
+
+    @pytest.mark.usefixtures("populated_db")
+    async def test_get_article_no_summary(self, session_factory):
+        """Article without summary does not include summary fields."""
+        svc = _make_service()
+        with patch(
+            "app.services.chat.get_session_factory",
+            new_callable=AsyncMock,
+            return_value=session_factory,
+        ):
+            result = await svc._tool_get_article({"article_id": "test-article-001"})
+
+        assert "summary_text" not in result
+        assert "key_points" not in result
+
+
+# ---------------------------------------------------------------------------
+# 8. _tool_browse_by_tag
+# ---------------------------------------------------------------------------
+
+
+class TestToolBrowseByTag:
+    """Tests for _tool_browse_by_tag."""
+
+    @pytest.mark.usefixtures("populated_db")
+    async def test_browse_tag_returns_matching_articles(self, session_factory):
+        svc = _make_service()
+        with patch(
+            "app.services.chat.get_session_factory",
+            new_callable=AsyncMock,
+            return_value=session_factory,
+        ):
+            result = await svc._tool_browse_by_tag({"tag": "ai-dev-tools"})
+
+        assert result["tag"] == "ai-dev-tools"
+        assert len(result["articles"]) >= 1
+        assert result["articles"][0]["id"] == "test-article-003"
+
+    @pytest.mark.usefixtures("populated_db")
+    async def test_browse_tag_no_matches(self, session_factory):
+        svc = _make_service()
+        with patch(
+            "app.services.chat.get_session_factory",
+            new_callable=AsyncMock,
+            return_value=session_factory,
+        ):
+            result = await svc._tool_browse_by_tag({"tag": "nonexistent-tag"})
+
+        assert result["tag"] == "nonexistent-tag"
+        assert result["articles"] == []
+
+    @pytest.mark.usefixtures("populated_db")
+    async def test_browse_tag_respects_limit(self, session_factory):
+        svc = _make_service()
+        with patch(
+            "app.services.chat.get_session_factory",
+            new_callable=AsyncMock,
+            return_value=session_factory,
+        ):
+            result = await svc._tool_browse_by_tag({"tag": "ai-dev-tools", "limit": 1})
+
+        assert len(result["articles"]) <= 1
+
+
+# ---------------------------------------------------------------------------
+# 9. _tool_list_tags
+# ---------------------------------------------------------------------------
+
+
+class TestToolListTags:
+    """Tests for _tool_list_tags."""
+
+    @pytest.mark.usefixtures("populated_db")
+    async def test_list_tags_returns_tags_with_counts(self, session_factory):
+        svc = _make_service()
+        with patch(
+            "app.services.chat.get_session_factory",
+            new_callable=AsyncMock,
+            return_value=session_factory,
+        ):
+            result = await svc._tool_list_tags()
+
+        assert "tags" in result
+        # Should have tags with article_count > 0
+        for tag in result["tags"]:
+            assert "slug" in tag
+            assert "name" in tag
+            assert "article_count" in tag
+            assert tag["article_count"] > 0
+
+    @pytest.mark.usefixtures("populated_db")
+    async def test_list_tags_excludes_zero_count(self, session_factory):
+        """Tags with no articles should not appear in the list."""
+        svc = _make_service()
+        with patch(
+            "app.services.chat.get_session_factory",
+            new_callable=AsyncMock,
+            return_value=session_factory,
+        ):
+            result = await svc._tool_list_tags()
+
+        for tag in result["tags"]:
+            assert tag["article_count"] > 0
+
+
+# ---------------------------------------------------------------------------
+# 10. _tool_browse_top_articles
+# ---------------------------------------------------------------------------
+
+
+class TestToolBrowseTopArticles:
+    """Tests for _tool_browse_top_articles."""
+
+    @pytest.mark.usefixtures("populated_db")
+    async def test_returns_articles_sorted_by_score(self, session_factory):
+        svc = _make_service()
+        with patch(
+            "app.services.chat.get_session_factory",
+            new_callable=AsyncMock,
+            return_value=session_factory,
+        ):
+            result = await svc._tool_browse_top_articles({"limit": 10})
+
+        assert "articles" in result
+        assert len(result["articles"]) >= 1
+        # Should be sorted by info_score descending
+        scores = [a["info_score"] for a in result["articles"]]
+        assert scores == sorted(scores, reverse=True)
+
+    @pytest.mark.usefixtures("populated_db")
+    async def test_respects_limit(self, session_factory):
+        svc = _make_service()
+        with patch(
+            "app.services.chat.get_session_factory",
+            new_callable=AsyncMock,
+            return_value=session_factory,
+        ):
+            result = await svc._tool_browse_top_articles({"limit": 2})
+
+        assert len(result["articles"]) <= 2
+
+    @pytest.mark.usefixtures("populated_db")
+    async def test_min_score_filter(self, session_factory):
+        svc = _make_service()
+        with patch(
+            "app.services.chat.get_session_factory",
+            new_callable=AsyncMock,
+            return_value=session_factory,
+        ):
+            result = await svc._tool_browse_top_articles({"limit": 10, "min_score": 80})
+
+        for article in result["articles"]:
+            assert article["info_score"] >= 80
+
+    @pytest.mark.usefixtures("populated_db")
+    async def test_min_score_excludes_low_articles(self, session_factory):
+        """A very high min_score should exclude most articles."""
+        svc = _make_service()
+        with patch(
+            "app.services.chat.get_session_factory",
+            new_callable=AsyncMock,
+            return_value=session_factory,
+        ):
+            result = await svc._tool_browse_top_articles({"limit": 10, "min_score": 99})
+
+        # Only test-article-003 (score 100) qualifies
+        assert len(result["articles"]) == 1
+        assert result["articles"][0]["id"] == "test-article-003"
+
+    @pytest.mark.usefixtures("populated_db")
+    async def test_includes_tags(self, session_factory):
+        """Top articles should include their tags."""
+        svc = _make_service()
+        with patch(
+            "app.services.chat.get_session_factory",
+            new_callable=AsyncMock,
+            return_value=session_factory,
+        ):
+            result = await svc._tool_browse_top_articles({"limit": 10})
+
+        # Find article-003 which has tags
+        article_003 = [a for a in result["articles"] if a["id"] == "test-article-003"]
+        assert len(article_003) == 1
+        assert "ai-dev-tools" in article_003[0]["tags"]
+
+
+# ---------------------------------------------------------------------------
+# 11. Readwise fallback error handling in _tool_read_article_content
+# ---------------------------------------------------------------------------
+
+
+class TestReadArticleContentReadwiseErrors:
+    """Edge cases for Readwise fallback in _tool_read_article_content."""
+
+    @pytest.mark.usefixtures("populated_db")
+    async def test_readwise_returns_none_doc(self, session_factory):
+        """Readwise returns None for the document."""
+        svc = _make_service()
+        mock_readwise_svc = MagicMock()
+        mock_readwise_svc.get_document = AsyncMock(return_value=None)
+
+        with (
+            patch(
+                "app.services.chat.get_session_factory",
+                new_callable=AsyncMock,
+                return_value=session_factory,
+            ),
+            patch(
+                "app.services.readwise.get_readwise_service",
+                return_value=mock_readwise_svc,
+            ),
+        ):
+            result = await svc._tool_read_article_content(
+                {"article_id": "test-article-003"}
+            )
+
+        assert "error" in result
+        assert "could not fetch" in result["error"].lower()
+
+    @pytest.mark.usefixtures("populated_db")
+    async def test_readwise_returns_doc_with_no_content(self, session_factory):
+        """Readwise returns a document but content is None."""
+        svc = _make_service()
+        mock_doc = MagicMock()
+        mock_doc.content = None
+
+        mock_readwise_svc = MagicMock()
+        mock_readwise_svc.get_document = AsyncMock(return_value=mock_doc)
+
+        with (
+            patch(
+                "app.services.chat.get_session_factory",
+                new_callable=AsyncMock,
+                return_value=session_factory,
+            ),
+            patch(
+                "app.services.readwise.get_readwise_service",
+                return_value=mock_readwise_svc,
+            ),
+        ):
+            result = await svc._tool_read_article_content(
+                {"article_id": "test-article-003"}
+            )
+
+        assert "error" in result
+
+    @pytest.mark.usefixtures("populated_db")
+    async def test_readwise_api_exception(self, session_factory):
+        """Readwise API throws an exception."""
+        svc = _make_service()
+        mock_readwise_svc = MagicMock()
+        mock_readwise_svc.get_document = AsyncMock(
+            side_effect=RuntimeError("API connection failed")
+        )
+
+        with (
+            patch(
+                "app.services.chat.get_session_factory",
+                new_callable=AsyncMock,
+                return_value=session_factory,
+            ),
+            patch(
+                "app.services.readwise.get_readwise_service",
+                return_value=mock_readwise_svc,
+            ),
+        ):
+            result = await svc._tool_read_article_content(
+                {"article_id": "test-article-003"}
+            )
+
+        assert "error" in result
+        assert "API connection failed" in result["error"]
+
+    @pytest.mark.usefixtures("populated_db")
+    async def test_readwise_html_stripping(self, session_factory):
+        """HTML tags in Readwise content are stripped properly."""
+        svc = _make_service()
+        mock_doc = MagicMock()
+        mock_doc.title = "Test"
+        mock_doc.content = (
+            "<h1>Title</h1><p>Para one.</p><br/><div class='inner'>Para two.</div>"
+        )
+
+        mock_readwise_svc = MagicMock()
+        mock_readwise_svc.get_document = AsyncMock(return_value=mock_doc)
+
+        with (
+            patch(
+                "app.services.chat.get_session_factory",
+                new_callable=AsyncMock,
+                return_value=session_factory,
+            ),
+            patch(
+                "app.services.readwise.get_readwise_service",
+                return_value=mock_readwise_svc,
+            ),
+        ):
+            result = await svc._tool_read_article_content(
+                {"article_id": "test-article-003"}
+            )
+
+        assert "<h1>" not in result["content"]
+        assert "<p>" not in result["content"]
+        assert "<div" not in result["content"]
+        assert "Title" in result["content"]
+        assert "Para one." in result["content"]
+        assert "Para two." in result["content"]
+
+
+# ---------------------------------------------------------------------------
+# 12. send_message streaming
+# ---------------------------------------------------------------------------
+
+
+def _make_stream_context(events: list[object], final_message: Message) -> MagicMock:
+    """Build a mock async context manager for messages.stream().
+
+    events: list of event objects to yield
+    final_message: the Message returned by stream.get_final_message()
+    """
+
+    class _MockStream:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args: object):
+            pass
+
+        async def __aiter__(self):
+            for event in events:
+                yield event
+
+        async def get_final_message(self):
+            return final_message
+
+    return _MockStream()
+
+
+def _make_event_with_text_delta(text: str) -> MagicMock:
+    """Create a mock streaming event carrying a TextDelta."""
+    event = MagicMock()
+    event.delta = TextDelta(type="text_delta", text=text)
+    return event
+
+
+def _make_event_no_delta() -> MagicMock:
+    """Create a mock streaming event with no delta attribute."""
+    event = MagicMock(spec=[])
+    return event
+
+
+class TestSendMessageStreaming:
+    """Tests for the send_message async generator."""
+
+    async def test_simple_text_response(self):
+        """A simple text response with no tool use yields text chunks."""
+        svc = _make_service()
+
+        final = Message(
+            id="msg_1",
+            type="message",
+            role="assistant",
+            model="test-model",
+            content=[TextBlock(type="text", text="Hello there!")],
+            stop_reason="end_turn",
+            usage=Usage(input_tokens=10, output_tokens=5),
+        )
+
+        events = [
+            _make_event_with_text_delta("Hello "),
+            _make_event_with_text_delta("there!"),
+        ]
+        stream_ctx = _make_stream_context(events, final)
+        svc._client.messages.stream = MagicMock(return_value=stream_ctx)
+
+        chunks: list[str] = []
+        async for chunk in svc.send_message([{"role": "user", "content": "Hi"}]):
+            chunks.append(chunk)
+
+        assert "Hello " in chunks
+        assert "there!" in chunks
+        assert svc.tool_messages == []
+
+    async def test_tool_use_then_text_response(self):
+        """Tool use loop: first response triggers tool, second gives final text."""
+        svc = _make_service()
+
+        # First response: tool_use
+        tool_block = ToolUseBlock(
+            type="tool_use",
+            id="toolu_abc",
+            name="search",
+            input={"query": "AI agents"},
+        )
+        first_message = Message(
+            id="msg_1",
+            type="message",
+            role="assistant",
+            model="test-model",
+            content=[
+                TextBlock(type="text", text="Searching..."),
+                tool_block,
+            ],
+            stop_reason="tool_use",
+            usage=Usage(input_tokens=10, output_tokens=20),
+        )
+
+        # Second response: final text
+        second_message = Message(
+            id="msg_2",
+            type="message",
+            role="assistant",
+            model="test-model",
+            content=[TextBlock(type="text", text="Found results!")],
+            stop_reason="end_turn",
+            usage=Usage(input_tokens=50, output_tokens=10),
+        )
+
+        call_count = 0
+
+        def make_stream(**kwargs: object) -> object:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                events = [_make_event_with_text_delta("Searching...")]
+                return _make_stream_context(events, first_message)
+            else:
+                events = [_make_event_with_text_delta("Found results!")]
+                return _make_stream_context(events, second_message)
+
+        svc._client.messages.stream = MagicMock(side_effect=make_stream)
+        svc._execute_tool = AsyncMock(
+            return_value={"results": [{"id": "1", "title": "Test"}], "modes_used": ["keyword"]}
+        )
+
+        chunks: list[str] = []
+        async for chunk in svc.send_message([{"role": "user", "content": "Find AI articles"}]):
+            chunks.append(chunk)
+
+        # Should have text chunks + tool markers + final text
+        joined = "".join(chunks)
+        assert "Searching..." in joined
+        assert "__tool_use__" in joined
+        assert "__tool_done__" in joined
+        assert "Found results!" in joined
+
+        # Tool messages should be stored for persistence
+        assert len(svc.tool_messages) == 2  # assistant + user (tool_result)
+        assert svc.tool_messages[0]["role"] == "assistant"
+        assert svc.tool_messages[1]["role"] == "user"
+
+    async def test_max_tokens_warning(self):
+        """When stop_reason is max_tokens, a truncation warning is appended."""
+        svc = _make_service()
+
+        final = Message(
+            id="msg_1",
+            type="message",
+            role="assistant",
+            model="test-model",
+            content=[TextBlock(type="text", text="Long response...")],
+            stop_reason="max_tokens",
+            usage=Usage(input_tokens=10, output_tokens=16384),
+        )
+
+        events = [_make_event_with_text_delta("Long response...")]
+        stream_ctx = _make_stream_context(events, final)
+        svc._client.messages.stream = MagicMock(return_value=stream_ctx)
+
+        chunks: list[str] = []
+        async for chunk in svc.send_message([{"role": "user", "content": "Write a lot"}]):
+            chunks.append(chunk)
+
+        joined = "".join(chunks)
+        assert "truncated" in joined.lower()
+
+    async def test_max_tool_rounds_warning(self):
+        """When all rounds use tools without a final text response, warn the user."""
+        svc = _make_service()
+
+        tool_block = ToolUseBlock(
+            type="tool_use",
+            id="toolu_loop",
+            name="search",
+            input={"query": "test"},
+        )
+        tool_message = Message(
+            id="msg_loop",
+            type="message",
+            role="assistant",
+            model="test-model",
+            content=[tool_block],
+            stop_reason="tool_use",
+            usage=Usage(input_tokens=10, output_tokens=10),
+        )
+
+        # Every round returns tool_use
+        svc._client.messages.stream = MagicMock(
+            return_value=_make_stream_context([], tool_message)
+        )
+        svc._execute_tool = AsyncMock(return_value={"results": []})
+
+        chunks: list[str] = []
+        async for chunk in svc.send_message([{"role": "user", "content": "loop"}]):
+            chunks.append(chunk)
+
+        joined = "".join(chunks)
+        assert "maximum tool use rounds" in joined.lower()
+
+    async def test_api_error_yields_error_message(self):
+        """When the Anthropic API raises, we yield a user-friendly error."""
+        svc = _make_service()
+
+        class _FailingStream:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args: object):
+                pass
+
+            async def __aiter__(self):
+                raise RuntimeError("API is down")
+                yield  # make this an async generator  # noqa: RUF027
+
+            async def get_final_message(self):
+                pass
+
+        svc._client.messages.stream = MagicMock(return_value=_FailingStream())
+
+        chunks: list[str] = []
+        async for chunk in svc.send_message([{"role": "user", "content": "test"}]):
+            chunks.append(chunk)
+
+        joined = "".join(chunks)
+        assert "error" in joined.lower()
+
+    async def test_events_without_delta_are_skipped(self):
+        """Events that don't have a TextDelta are silently skipped."""
+        svc = _make_service()
+
+        final = Message(
+            id="msg_1",
+            type="message",
+            role="assistant",
+            model="test-model",
+            content=[TextBlock(type="text", text="OK")],
+            stop_reason="end_turn",
+            usage=Usage(input_tokens=5, output_tokens=2),
+        )
+
+        events = [
+            _make_event_no_delta(),
+            _make_event_with_text_delta("OK"),
+            _make_event_no_delta(),
+        ]
+        stream_ctx = _make_stream_context(events, final)
+        svc._client.messages.stream = MagicMock(return_value=stream_ctx)
+
+        chunks: list[str] = []
+        async for chunk in svc.send_message([{"role": "user", "content": "hi"}]):
+            chunks.append(chunk)
+
+        assert chunks == ["OK"]
+
+    async def test_tool_use_marker_contains_tool_info(self):
+        """The __tool_use__ marker includes the tool name and input as JSON."""
+        svc = _make_service()
+
+        tool_block = ToolUseBlock(
+            type="tool_use",
+            id="toolu_xyz",
+            name="browse_by_tag",
+            input={"tag": "ai-agents"},
+        )
+        first_message = Message(
+            id="msg_1",
+            type="message",
+            role="assistant",
+            model="test-model",
+            content=[tool_block],
+            stop_reason="tool_use",
+            usage=Usage(input_tokens=10, output_tokens=10),
+        )
+        second_message = Message(
+            id="msg_2",
+            type="message",
+            role="assistant",
+            model="test-model",
+            content=[TextBlock(type="text", text="Here are the results")],
+            stop_reason="end_turn",
+            usage=Usage(input_tokens=30, output_tokens=10),
+        )
+
+        call_count = 0
+
+        def make_stream(**kwargs: object) -> object:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _make_stream_context([], first_message)
+            return _make_stream_context(
+                [_make_event_with_text_delta("Here are the results")], second_message
+            )
+
+        svc._client.messages.stream = MagicMock(side_effect=make_stream)
+        svc._execute_tool = AsyncMock(
+            return_value={"tag": "ai-agents", "articles": [{"id": "1"}]}
+        )
+
+        chunks: list[str] = []
+        async for chunk in svc.send_message([{"role": "user", "content": "show ai"}]):
+            chunks.append(chunk)
+
+        # Find the tool_use marker
+        tool_use_chunks = [c for c in chunks if c.startswith("__tool_use__:")]
+        assert len(tool_use_chunks) == 1
+        payload = json.loads(tool_use_chunks[0].split(":", 1)[1])
+        assert payload["tool"] == "browse_by_tag"
+        assert payload["input"] == {"tag": "ai-agents"}
+
+        # Find the tool_done marker
+        tool_done_chunks = [c for c in chunks if c.startswith("__tool_done__:")]
+        assert len(tool_done_chunks) == 1
+        done_payload = json.loads(tool_done_chunks[0].split(":", 1)[1])
+        assert done_payload["tool"] == "browse_by_tag"
+        assert "1" in done_payload["summary"]
+
+    async def test_multiple_tool_blocks_in_single_response(self):
+        """A single assistant response can contain multiple tool_use blocks."""
+        svc = _make_service()
+
+        tool1 = ToolUseBlock(
+            type="tool_use",
+            id="toolu_1",
+            name="search",
+            input={"query": "AI"},
+        )
+        tool2 = ToolUseBlock(
+            type="tool_use",
+            id="toolu_2",
+            name="list_tags",
+            input={},
+        )
+        first_message = Message(
+            id="msg_1",
+            type="message",
+            role="assistant",
+            model="test-model",
+            content=[tool1, tool2],
+            stop_reason="tool_use",
+            usage=Usage(input_tokens=10, output_tokens=20),
+        )
+        second_message = Message(
+            id="msg_2",
+            type="message",
+            role="assistant",
+            model="test-model",
+            content=[TextBlock(type="text", text="Done")],
+            stop_reason="end_turn",
+            usage=Usage(input_tokens=50, output_tokens=5),
+        )
+
+        call_count = 0
+
+        def make_stream(**kwargs: object) -> object:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _make_stream_context([], first_message)
+            return _make_stream_context(
+                [_make_event_with_text_delta("Done")], second_message
+            )
+
+        svc._client.messages.stream = MagicMock(side_effect=make_stream)
+
+        # Mock _execute_tool to track calls
+        tool_calls: list[str] = []
+
+        async def mock_execute(name: str, inp: dict) -> dict:
+            tool_calls.append(name)
+            if name == "search":
+                return {"results": [], "modes_used": []}
+            return {"tags": []}
+
+        svc._execute_tool = mock_execute  # type: ignore[assignment]
+
+        chunks: list[str] = []
+        async for chunk in svc.send_message([{"role": "user", "content": "search and list"}]):
+            chunks.append(chunk)
+
+        assert tool_calls == ["search", "list_tags"]
+        tool_use_chunks = [c for c in chunks if "__tool_use__" in c]
+        assert len(tool_use_chunks) == 2
+
+    async def test_round_separator_emitted_between_tool_rounds(self):
+        """A newline separator is emitted between tool use rounds (round > 0)."""
+        svc = _make_service()
+
+        tool_block = ToolUseBlock(
+            type="tool_use",
+            id="toolu_r",
+            name="search",
+            input={"query": "AI"},
+        )
+        tool_message = Message(
+            id="msg_t",
+            type="message",
+            role="assistant",
+            model="test-model",
+            content=[tool_block],
+            stop_reason="tool_use",
+            usage=Usage(input_tokens=10, output_tokens=10),
+        )
+        final = Message(
+            id="msg_f",
+            type="message",
+            role="assistant",
+            model="test-model",
+            content=[TextBlock(type="text", text="Result")],
+            stop_reason="end_turn",
+            usage=Usage(input_tokens=30, output_tokens=5),
+        )
+
+        call_count = 0
+
+        def make_stream(**kwargs: object) -> object:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _make_stream_context([], tool_message)
+            return _make_stream_context(
+                [_make_event_with_text_delta("Result")], final
+            )
+
+        svc._client.messages.stream = MagicMock(side_effect=make_stream)
+        svc._execute_tool = AsyncMock(return_value={"results": []})
+
+        chunks: list[str] = []
+        async for chunk in svc.send_message([{"role": "user", "content": "test"}]):
+            chunks.append(chunk)
+
+        # Round 1 (index 0) has no separator, but round 2 (index 1) should emit "\n\n"
+        assert "\n\n" in chunks
