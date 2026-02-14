@@ -8,6 +8,8 @@ from anthropic.types import TextBlock
 
 from app.models.article import Article, ArticleScore, ArticleTag
 from app.services.tagger import (
+    _COLOR_VALUES,
+    _FALLBACK,
     CURRENT_TAGGING_VERSION,
     TAG_DEFINITIONS,
     TAGS_BY_SLUG,
@@ -18,8 +20,6 @@ from app.services.tagger import (
     get_tag_colors,
     get_tag_names,
     get_tag_styles,
-    _COLOR_VALUES,
-    _FALLBACK,
 )
 
 # ---------------------------------------------------------------------------
@@ -46,9 +46,7 @@ def _build_tagger(claude_response_data: dict[str, object]) -> ArticleTagger:
         patch("app.services.tagger.get_readwise_service"),
     ):
         mock_client = MagicMock()
-        mock_client.messages.create.return_value = _mock_anthropic_response(
-            claude_response_data
-        )
+        mock_client.messages.create.return_value = _mock_anthropic_response(claude_response_data)
         mock_anthropic_cls.return_value = mock_client
         tagger = ArticleTagger()
     return tagger
@@ -63,9 +61,7 @@ def _build_tagger_with_readwise(
         patch("app.services.tagger.get_readwise_service") as mock_rw,
     ):
         mock_client = MagicMock()
-        mock_client.messages.create.return_value = _mock_anthropic_response(
-            claude_response_data
-        )
+        mock_client.messages.create.return_value = _mock_anthropic_response(claude_response_data)
         mock_anthropic_cls.return_value = mock_client
 
         mock_rw_service = AsyncMock()
@@ -167,9 +163,7 @@ class TestTagStyles:
         expected_style = f"background:{bg}; color:{text_color}"
 
         # Manually test the logic with a tag that has an unknown color
-        tag = TagDefinition(
-            slug="test", name="Test", description="Test", color="nonexistent-color"
-        )
+        tag = TagDefinition(slug="test", name="Test", description="Test", color="nonexistent-color")
         bg_val, text_val = _COLOR_VALUES.get(tag.color, _FALLBACK)
         style = f"background:{bg_val}; color:{text_val}"
         assert style == expected_style
@@ -409,9 +403,7 @@ class TestTagArticle:
 
     @patch("app.services.tagger.log_usage", new_callable=AsyncMock)
     @patch("app.services.tagger.get_session_factory")
-    async def test_tag_article_force_retags(
-        self, mock_factory, mock_log_usage, session_factory
-    ):
+    async def test_tag_article_force_retags(self, mock_factory, mock_log_usage, session_factory):
         """Force=True re-tags even if already tagged."""
         mock_factory.return_value = session_factory
 
@@ -705,9 +697,7 @@ class TestRetagAllArticles:
 
     @patch("app.services.tagger.log_usage", new_callable=AsyncMock)
     @patch("app.services.tagger.get_session_factory")
-    async def test_retags_all_scored_articles(
-        self, mock_factory, mock_log_usage, session_factory
-    ):
+    async def test_retags_all_scored_articles(self, mock_factory, mock_log_usage, session_factory):
         """All scored articles get re-tagged regardless of existing tags."""
         mock_factory.return_value = session_factory
 

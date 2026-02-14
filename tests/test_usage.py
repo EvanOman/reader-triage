@@ -9,7 +9,6 @@ from sqlalchemy import select
 from app.models.article import ApiUsageLog
 from app.services.usage import DEFAULT_PRICING, MODEL_PRICING, compute_cost, log_usage
 
-
 # ---------------------------------------------------------------------------
 # 1. compute_cost
 # ---------------------------------------------------------------------------

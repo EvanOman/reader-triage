@@ -1,9 +1,7 @@
 """Tests for the author service."""
 
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 from app.models.article import Author, AuthorBook
 from app.services.authors import (
@@ -13,7 +11,6 @@ from app.services.authors import (
     get_author_service,
     normalize_author_name,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -465,15 +462,24 @@ class TestSyncAuthorsFromReadwise:
 
         books = [
             _make_readwise_book(
-                id=1, author="Author A", title="Book 1", num_highlights=5,
+                id=1,
+                author="Author A",
+                title="Book 1",
+                num_highlights=5,
                 last_highlight_at=dt1,
             ),
             _make_readwise_book(
-                id=2, author="Author A", title="Book 2", num_highlights=3,
+                id=2,
+                author="Author A",
+                title="Book 2",
+                num_highlights=3,
                 last_highlight_at=dt2,
             ),
             _make_readwise_book(
-                id=3, author="Author B", title="Book 3", num_highlights=10,
+                id=3,
+                author="Author B",
+                title="Book 3",
+                num_highlights=10,
                 last_highlight_at=dt1,
             ),
         ]
@@ -527,11 +533,17 @@ class TestSyncAuthorsFromReadwise:
 
         books = [
             _make_readwise_book(
-                id=1, author="Author A", title="Book 1", num_highlights=10,
+                id=1,
+                author="Author A",
+                title="Book 1",
+                num_highlights=10,
                 last_highlight_at=datetime(2024, 6, 1),
             ),
             _make_readwise_book(
-                id=2, author="Author A", title="Book 2", num_highlights=5,
+                id=2,
+                author="Author A",
+                title="Book 2",
+                num_highlights=5,
                 last_highlight_at=datetime(2024, 8, 1),
             ),
         ]
@@ -651,12 +663,20 @@ class TestSyncAuthorsFromReadwise:
 
         books = [
             _make_readwise_book(
-                id=101, author="Author A", title="First Book", num_highlights=5,
-                source_url="https://example.com/1", category="articles",
+                id=101,
+                author="Author A",
+                title="First Book",
+                num_highlights=5,
+                source_url="https://example.com/1",
+                category="articles",
             ),
             _make_readwise_book(
-                id=102, author="Author A", title="Second Book", num_highlights=3,
-                source_url="https://example.com/2", category="books",
+                id=102,
+                author="Author A",
+                title="Second Book",
+                num_highlights=3,
+                source_url="https://example.com/2",
+                category="books",
             ),
         ]
 
@@ -703,8 +723,11 @@ class TestSyncAuthorsFromReadwise:
         new_dt = datetime(2025, 1, 1)
         books = [
             _make_readwise_book(
-                id=101, author="Author A", title="First Book",
-                num_highlights=15, last_highlight_at=new_dt,
+                id=101,
+                author="Author A",
+                title="First Book",
+                num_highlights=15,
+                last_highlight_at=new_dt,
             ),
         ]
 
@@ -724,9 +747,7 @@ class TestSyncAuthorsFromReadwise:
             from sqlalchemy import select
 
             ab = (
-                await s.execute(
-                    select(AuthorBook).where(AuthorBook.readwise_book_id == 101)
-                )
+                await s.execute(select(AuthorBook).where(AuthorBook.readwise_book_id == 101))
             ).scalar_one()
             assert ab.num_highlights == 15
             assert ab.last_highlight_at == new_dt
@@ -745,7 +766,9 @@ class TestSyncAuthorsFromReadwise:
         late = datetime(2025, 1, 1)
 
         books = [
-            _make_readwise_book(id=1, author="Author A", num_highlights=3, last_highlight_at=middle),
+            _make_readwise_book(
+                id=1, author="Author A", num_highlights=3, last_highlight_at=middle
+            ),
             _make_readwise_book(id=2, author="Author A", num_highlights=2, last_highlight_at=early),
             _make_readwise_book(id=3, author="Author A", num_highlights=5, last_highlight_at=late),
         ]

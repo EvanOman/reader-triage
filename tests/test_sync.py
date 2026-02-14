@@ -15,7 +15,6 @@ from app.services.sync import (
     get_background_sync,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -35,9 +34,7 @@ def _make_readwise_doc(
     return doc
 
 
-def _make_scan_result(
-    *, total_scanned: int = 10, newly_scored: int = 3
-) -> MagicMock:
+def _make_scan_result(*, total_scanned: int = 10, newly_scored: int = 3) -> MagicMock:
     """Create a mock ScanResult returned by scorer.scan_all_documents."""
     result = MagicMock()
     result.total_scanned = total_scanned
@@ -296,9 +293,9 @@ class TestQuickRefresh:
         mock_readwise = AsyncMock()
         mock_readwise.get_all_documents = AsyncMock(
             return_value=[
-                _make_readwise_doc(id="multi-0", location="new"),       # unchanged
-                _make_readwise_doc(id="multi-1", location="later"),     # changed
-                _make_readwise_doc(id="multi-2", location="archive"),   # changed
+                _make_readwise_doc(id="multi-0", location="new"),  # unchanged
+                _make_readwise_doc(id="multi-1", location="later"),  # changed
+                _make_readwise_doc(id="multi-2", location="archive"),  # changed
             ]
         )
         mock_get_readwise.return_value = mock_readwise
@@ -398,9 +395,7 @@ class TestRunSync:
     ):
         """If scanner throws, status.last_error should be set."""
         mock_scorer = AsyncMock()
-        mock_scorer.scan_all_documents = AsyncMock(
-            side_effect=RuntimeError("Readwise API timeout")
-        )
+        mock_scorer.scan_all_documents = AsyncMock(side_effect=RuntimeError("Readwise API timeout"))
         mock_get_scorer.return_value = mock_scorer
 
         sync = BackgroundSync()
@@ -540,8 +535,8 @@ class TestPeriodicLifecycle:
 
         # Patch the loops so they don't actually run
         with (
-            patch.object(sync, "_quick_refresh_loop", new_callable=AsyncMock) as mock_quick,
-            patch.object(sync, "_full_sync_loop", new_callable=AsyncMock) as mock_full,
+            patch.object(sync, "_quick_refresh_loop", new_callable=AsyncMock),
+            patch.object(sync, "_full_sync_loop", new_callable=AsyncMock),
         ):
             sync.start_periodic()
 
@@ -609,8 +604,6 @@ class TestPeriodicLifecycle:
             patch.object(sync, "_full_sync_loop", new_callable=AsyncMock),
         ):
             sync.start_periodic()
-            old_quick = sync._quick_task
-            old_full = sync._full_task
 
             # Cancel to simulate done tasks
             sync.stop_periodic()

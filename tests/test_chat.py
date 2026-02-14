@@ -712,9 +712,7 @@ class TestSerializeContentBlocks:
         assert result == [{"type": "text", "text": "Hello world"}]
 
     def test_tool_use_block(self):
-        block = ToolUseBlock(
-            type="tool_use", id="toolu_abc", name="search", input={"query": "AI"}
-        )
+        block = ToolUseBlock(type="tool_use", id="toolu_abc", name="search", input={"query": "AI"})
         result = _serialize_content_blocks([block])
         assert result == [
             {
@@ -728,9 +726,7 @@ class TestSerializeContentBlocks:
     def test_mixed_blocks(self):
         blocks = [
             TextBlock(type="text", text="Let me search"),
-            ToolUseBlock(
-                type="tool_use", id="toolu_123", name="search", input={"query": "x"}
-            ),
+            ToolUseBlock(type="tool_use", id="toolu_123", name="search", input={"query": "x"}),
         ]
         result = _serialize_content_blocks(blocks)
         assert len(result) == 2
@@ -1048,9 +1044,7 @@ class TestReadArticleContentReadwiseErrors:
                 return_value=mock_readwise_svc,
             ),
         ):
-            result = await svc._tool_read_article_content(
-                {"article_id": "test-article-003"}
-            )
+            result = await svc._tool_read_article_content({"article_id": "test-article-003"})
 
         assert "error" in result
         assert "could not fetch" in result["error"].lower()
@@ -1076,9 +1070,7 @@ class TestReadArticleContentReadwiseErrors:
                 return_value=mock_readwise_svc,
             ),
         ):
-            result = await svc._tool_read_article_content(
-                {"article_id": "test-article-003"}
-            )
+            result = await svc._tool_read_article_content({"article_id": "test-article-003"})
 
         assert "error" in result
 
@@ -1102,9 +1094,7 @@ class TestReadArticleContentReadwiseErrors:
                 return_value=mock_readwise_svc,
             ),
         ):
-            result = await svc._tool_read_article_content(
-                {"article_id": "test-article-003"}
-            )
+            result = await svc._tool_read_article_content({"article_id": "test-article-003"})
 
         assert "error" in result
         assert "API connection failed" in result["error"]
@@ -1115,9 +1105,7 @@ class TestReadArticleContentReadwiseErrors:
         svc = _make_service()
         mock_doc = MagicMock()
         mock_doc.title = "Test"
-        mock_doc.content = (
-            "<h1>Title</h1><p>Para one.</p><br/><div class='inner'>Para two.</div>"
-        )
+        mock_doc.content = "<h1>Title</h1><p>Para one.</p><br/><div class='inner'>Para two.</div>"
 
         mock_readwise_svc = MagicMock()
         mock_readwise_svc.get_document = AsyncMock(return_value=mock_doc)
@@ -1133,9 +1121,7 @@ class TestReadArticleContentReadwiseErrors:
                 return_value=mock_readwise_svc,
             ),
         ):
-            result = await svc._tool_read_article_content(
-                {"article_id": "test-article-003"}
-            )
+            result = await svc._tool_read_article_content({"article_id": "test-article-003"})
 
         assert "<h1>" not in result["content"]
         assert "<p>" not in result["content"]
@@ -1333,9 +1319,7 @@ class TestSendMessageStreaming:
         )
 
         # Every round returns tool_use
-        svc._client.messages.stream = MagicMock(
-            return_value=_make_stream_context([], tool_message)
-        )
+        svc._client.messages.stream = MagicMock(return_value=_make_stream_context([], tool_message))
         svc._execute_tool = AsyncMock(return_value={"results": []})
 
         chunks: list[str] = []
@@ -1441,9 +1425,7 @@ class TestSendMessageStreaming:
             )
 
         svc._client.messages.stream = MagicMock(side_effect=make_stream)
-        svc._execute_tool = AsyncMock(
-            return_value={"tag": "ai-agents", "articles": [{"id": "1"}]}
-        )
+        svc._execute_tool = AsyncMock(return_value={"tag": "ai-agents", "articles": [{"id": "1"}]})
 
         chunks: list[str] = []
         async for chunk in svc.send_message([{"role": "user", "content": "show ai"}]):
@@ -1505,9 +1487,7 @@ class TestSendMessageStreaming:
             call_count += 1
             if call_count == 1:
                 return _make_stream_context([], first_message)
-            return _make_stream_context(
-                [_make_event_with_text_delta("Done")], second_message
-            )
+            return _make_stream_context([_make_event_with_text_delta("Done")], second_message)
 
         svc._client.messages.stream = MagicMock(side_effect=make_stream)
 
@@ -1566,9 +1546,7 @@ class TestSendMessageStreaming:
             call_count += 1
             if call_count == 1:
                 return _make_stream_context([], tool_message)
-            return _make_stream_context(
-                [_make_event_with_text_delta("Result")], final
-            )
+            return _make_stream_context([_make_event_with_text_delta("Result")], final)
 
         svc._client.messages.stream = MagicMock(side_effect=make_stream)
         svc._execute_tool = AsyncMock(return_value={"results": []})

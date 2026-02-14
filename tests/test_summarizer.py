@@ -3,7 +3,6 @@
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from anthropic.types import TextBlock
 
 from app.models.article import Article, ArticleScore, Summary
@@ -36,9 +35,7 @@ def _build_summarizer(claude_response_data: dict[str, object]) -> Summarizer:
         patch("app.services.summarizer.get_readwise_service"),
     ):
         mock_client = MagicMock()
-        mock_client.messages.create.return_value = _mock_anthropic_response(
-            claude_response_data
-        )
+        mock_client.messages.create.return_value = _mock_anthropic_response(claude_response_data)
         mock_anthropic_cls.return_value = mock_client
         summarizer = Summarizer()
     return summarizer
@@ -53,9 +50,7 @@ def _build_summarizer_with_readwise(
         patch("app.services.summarizer.get_readwise_service") as mock_rw,
     ):
         mock_client = MagicMock()
-        mock_client.messages.create.return_value = _mock_anthropic_response(
-            claude_response_data
-        )
+        mock_client.messages.create.return_value = _mock_anthropic_response(claude_response_data)
         mock_anthropic_cls.return_value = mock_client
 
         mock_rw_service = AsyncMock()
@@ -313,9 +308,7 @@ class TestSummarize:
         mock_factory.return_value = session_factory
 
         article = _make_article(article_id="sum-2")
-        summarizer = _build_summarizer_with_readwise(
-            {"summary": "Unused.", "key_points": []}, None
-        )
+        summarizer = _build_summarizer_with_readwise({"summary": "Unused.", "key_points": []}, None)
 
         result = await summarizer.summarize(article)
         assert result is None
@@ -521,9 +514,7 @@ class TestSummarizeLowInfoArticles:
 
     @patch("app.services.summarizer.log_usage", new_callable=AsyncMock)
     @patch("app.services.summarizer.get_session_factory")
-    async def test_skips_high_score_articles(
-        self, mock_factory, mock_log_usage, session_factory
-    ):
+    async def test_skips_high_score_articles(self, mock_factory, mock_log_usage, session_factory):
         """Articles above threshold are not summarized."""
         mock_factory.return_value = session_factory
 
@@ -554,9 +545,7 @@ class TestSummarizeLowInfoArticles:
 
     @patch("app.services.summarizer.log_usage", new_callable=AsyncMock)
     @patch("app.services.summarizer.get_session_factory")
-    async def test_skips_already_summarized(
-        self, mock_factory, mock_log_usage, session_factory
-    ):
+    async def test_skips_already_summarized(self, mock_factory, mock_log_usage, session_factory):
         """Low-info articles that already have a summary are skipped."""
         mock_factory.return_value = session_factory
 
@@ -626,9 +615,7 @@ class TestSummarizeLowInfoArticles:
 
     @patch("app.services.summarizer.log_usage", new_callable=AsyncMock)
     @patch("app.services.summarizer.get_session_factory")
-    async def test_threshold_boundary_29(
-        self, mock_factory, mock_log_usage, session_factory
-    ):
+    async def test_threshold_boundary_29(self, mock_factory, mock_log_usage, session_factory):
         """Article with info_score=29 IS summarized."""
         mock_factory.return_value = session_factory
 
@@ -666,9 +653,7 @@ class TestSummarizeLowInfoArticles:
 
     @patch("app.services.summarizer.log_usage", new_callable=AsyncMock)
     @patch("app.services.summarizer.get_session_factory")
-    async def test_empty_db_returns_empty(
-        self, mock_factory, mock_log_usage, session_factory
-    ):
+    async def test_empty_db_returns_empty(self, mock_factory, mock_log_usage, session_factory):
         """No articles in DB means no summaries generated."""
         mock_factory.return_value = session_factory
         summarizer = _build_summarizer({"summary": "Unused.", "key_points": []})
@@ -706,9 +691,7 @@ class TestSummarizeLowInfoArticles:
             await session.commit()
 
         # Readwise returns no document, so summarize returns None
-        summarizer = _build_summarizer_with_readwise(
-            {"summary": "Unused.", "key_points": []}, None
-        )
+        summarizer = _build_summarizer_with_readwise({"summary": "Unused.", "key_points": []}, None)
 
         results = await summarizer.summarize_low_info_articles()
         assert len(results) == 0

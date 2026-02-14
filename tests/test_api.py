@@ -512,9 +512,7 @@ class TestArticlesAPI:
         assert resp.status_code == 200
         assert resp.json() == []
 
-    async def test_list_articles_with_data(
-        self, client: httpx.AsyncClient, populated_test_db
-    ):
+    async def test_list_articles_with_data(self, client: httpx.AsyncClient, populated_test_db):
         """List articles returns scored articles, excluding archived by default."""
         resp = await client.get("/api/articles")
         assert resp.status_code == 200
@@ -536,9 +534,7 @@ class TestArticlesAPI:
         article_ids = [a["id"] for a in articles]
         assert "art-004" in article_ids
 
-    async def test_list_articles_filter_by_tag(
-        self, client: httpx.AsyncClient, populated_test_db
-    ):
+    async def test_list_articles_filter_by_tag(self, client: httpx.AsyncClient, populated_test_db):
         """Filtering by tag returns only articles with that tag."""
         resp = await client.get("/api/articles", params={"tag": "ai-agents"})
         assert resp.status_code == 200
@@ -586,9 +582,7 @@ class TestArticlesAPI:
         for a in articles:
             assert a["location"] == "later"
 
-    async def test_list_articles_sort_by_added(
-        self, client: httpx.AsyncClient, populated_test_db
-    ):
+    async def test_list_articles_sort_by_added(self, client: httpx.AsyncClient, populated_test_db):
         """Sorting by 'added' orders by readwise_created_at descending."""
         resp = await client.get("/api/articles", params={"sort": "added"})
         assert resp.status_code == 200
@@ -605,9 +599,7 @@ class TestArticlesAPI:
         articles = resp.json()
         assert len(articles) > 0
 
-    async def test_list_articles_pagination(
-        self, client: httpx.AsyncClient, populated_test_db
-    ):
+    async def test_list_articles_pagination(self, client: httpx.AsyncClient, populated_test_db):
         """Pagination via skip and limit works correctly."""
         resp_all = await client.get("/api/articles", params={"limit": 100})
         all_articles = resp_all.json()
@@ -630,12 +622,28 @@ class TestArticlesAPI:
         assert len(articles) >= 1
         article = articles[0]
         expected_keys = {
-            "id", "title", "url", "author", "word_count", "location",
-            "category", "info_score", "priority_score", "author_boost",
-            "specificity_score", "novelty_score", "depth_score",
-            "actionability_score", "score_reasons", "overall_assessment",
-            "skip_recommended", "skip_reason", "has_summary", "tags",
-            "added_at", "published_date",
+            "id",
+            "title",
+            "url",
+            "author",
+            "word_count",
+            "location",
+            "category",
+            "info_score",
+            "priority_score",
+            "author_boost",
+            "specificity_score",
+            "novelty_score",
+            "depth_score",
+            "actionability_score",
+            "score_reasons",
+            "overall_assessment",
+            "skip_recommended",
+            "skip_reason",
+            "has_summary",
+            "tags",
+            "added_at",
+            "published_date",
         }
         assert expected_keys.issubset(set(article.keys()))
 
@@ -643,9 +651,7 @@ class TestArticlesAPI:
 class TestArticleDetailAPI:
     """Test the /api/articles/{article_id} detail endpoint."""
 
-    async def test_get_article_detail(
-        self, client: httpx.AsyncClient, populated_test_db
-    ):
+    async def test_get_article_detail(self, client: httpx.AsyncClient, populated_test_db):
         """Getting a valid article returns full detail including summary fields."""
         resp = await client.get("/api/articles/art-001")
         assert resp.status_code == 200
@@ -658,9 +664,7 @@ class TestArticleDetailAPI:
         assert data["summary_text"] is None
         assert data["key_points"] is None
 
-    async def test_get_article_with_summary(
-        self, client: httpx.AsyncClient, populated_test_db
-    ):
+    async def test_get_article_with_summary(self, client: httpx.AsyncClient, populated_test_db):
         """Article with a summary returns summary_text and key_points."""
         resp = await client.get("/api/articles/art-003")
         assert resp.status_code == 200
@@ -675,9 +679,7 @@ class TestArticleDetailAPI:
         resp = await client.get("/api/articles/nonexistent-id")
         assert resp.status_code == 404
 
-    async def test_get_article_without_score(
-        self, client: httpx.AsyncClient, test_session_factory
-    ):
+    async def test_get_article_without_score(self, client: httpx.AsyncClient, test_session_factory):
         """Article with no score returns zeroed-out score fields."""
         async with test_session_factory() as session:
             art = Article(
@@ -706,18 +708,14 @@ class TestTop5API:
         assert resp.status_code == 200
         assert resp.json() == []
 
-    async def test_top5_returns_max_five(
-        self, client: httpx.AsyncClient, populated_test_db
-    ):
+    async def test_top5_returns_max_five(self, client: httpx.AsyncClient, populated_test_db):
         """Top5 returns at most 5 articles."""
         resp = await client.get("/api/top5")
         assert resp.status_code == 200
         articles = resp.json()
         assert len(articles) <= 5
 
-    async def test_top5_excludes_archived(
-        self, client: httpx.AsyncClient, populated_test_db
-    ):
+    async def test_top5_excludes_archived(self, client: httpx.AsyncClient, populated_test_db):
         """Top5 excludes archived articles."""
         resp = await client.get("/api/top5")
         assert resp.status_code == 200
@@ -725,9 +723,7 @@ class TestTop5API:
         for a in articles:
             assert a["id"] != "art-004"
 
-    async def test_top5_sorted_by_score(
-        self, client: httpx.AsyncClient, populated_test_db
-    ):
+    async def test_top5_sorted_by_score(self, client: httpx.AsyncClient, populated_test_db):
         """Top5 articles are sorted by info_score descending."""
         resp = await client.get("/api/top5")
         assert resp.status_code == 200
@@ -776,9 +772,7 @@ class TestStatsAPI:
         assert data["authors_synced"] == 0
         assert data["liked_authors_count"] == 0
 
-    async def test_stats_with_data(
-        self, client: httpx.AsyncClient, populated_test_db
-    ):
+    async def test_stats_with_data(self, client: httpx.AsyncClient, populated_test_db):
         """Stats with data returns correct counts (excluding archived)."""
         resp = await client.get("/api/stats")
         assert resp.status_code == 200
@@ -893,9 +887,7 @@ class TestTagAPI:
         assert data["articles_tagged"] == 1
         mock_tagger.retag_all_articles.assert_called_once()
 
-    async def test_list_tags(
-        self, client: httpx.AsyncClient, populated_test_db
-    ):
+    async def test_list_tags(self, client: httpx.AsyncClient, populated_test_db):
         """GET /api/tags returns all defined tags with article counts."""
         resp = await client.get("/api/tags")
         assert resp.status_code == 200
@@ -949,9 +941,7 @@ class TestAuthorsAPI:
         assert resp.status_code == 200
         assert resp.json() == []
 
-    async def test_list_authors_with_data(
-        self, client: httpx.AsyncClient, populated_test_db
-    ):
+    async def test_list_authors_with_data(self, client: httpx.AsyncClient, populated_test_db):
         """Returns authors sorted by highlight count, filtered by min_highlights."""
         resp = await client.get("/api/authors")
         assert resp.status_code == 200
@@ -974,9 +964,7 @@ class TestAuthorsAPI:
         for a in authors:
             assert a["total_highlights"] >= 10
 
-    async def test_list_authors_limit(
-        self, client: httpx.AsyncClient, populated_test_db
-    ):
+    async def test_list_authors_limit(self, client: httpx.AsyncClient, populated_test_db):
         """Limit parameter restricts number of results."""
         resp = await client.get("/api/authors", params={"limit": 1})
         assert resp.status_code == 200
@@ -1007,9 +995,7 @@ class TestAuthorsAPI:
             updated_authors=7,
             total_books=25,
         )
-        mock_author_service.sync_authors_from_readwise = AsyncMock(
-            return_value=mock_sync_result
-        )
+        mock_author_service.sync_authors_from_readwise = AsyncMock(return_value=mock_sync_result)
         mock_scorer = MagicMock()
         mock_scorer.recompute_priorities = AsyncMock(return_value=15)
 
@@ -1027,30 +1013,22 @@ class TestAuthorsAPI:
         assert data["total_books"] == 25
         assert data["priorities_updated"] == 15
 
-    async def test_toggle_author_favorite(
-        self, client: httpx.AsyncClient, populated_test_db
-    ):
+    async def test_toggle_author_favorite(self, client: httpx.AsyncClient, populated_test_db):
         """POST /api/authors/{id}/favorite toggles favorite status."""
         mock_author_service = MagicMock()
         mock_author_service.mark_favorite = AsyncMock()
         with patch("app.routers.api.get_author_service", return_value=mock_author_service):
-            resp = await client.post(
-                "/api/authors/1/favorite", params={"is_favorite": "true"}
-            )
+            resp = await client.post("/api/authors/1/favorite", params={"is_favorite": "true"})
         assert resp.status_code == 200
         assert resp.json() == {"status": "ok"}
         mock_author_service.mark_favorite.assert_called_once_with(1, True)
 
-    async def test_toggle_author_unfavorite(
-        self, client: httpx.AsyncClient, populated_test_db
-    ):
+    async def test_toggle_author_unfavorite(self, client: httpx.AsyncClient, populated_test_db):
         """POST /api/authors/{id}/favorite?is_favorite=false unfavorites."""
         mock_author_service = MagicMock()
         mock_author_service.mark_favorite = AsyncMock()
         with patch("app.routers.api.get_author_service", return_value=mock_author_service):
-            resp = await client.post(
-                "/api/authors/1/favorite", params={"is_favorite": "false"}
-            )
+            resp = await client.post("/api/authors/1/favorite", params={"is_favorite": "false"})
         assert resp.status_code == 200
         assert resp.json() == {"status": "ok"}
         mock_author_service.mark_favorite.assert_called_once_with(1, False)
@@ -1064,9 +1042,7 @@ class TestAuthorsAPI:
 class TestDashboardPagesWithData:
     """Test dashboard pages when the DB has articles."""
 
-    async def test_dashboard_with_articles(
-        self, client: httpx.AsyncClient, populated_test_db
-    ):
+    async def test_dashboard_with_articles(self, client: httpx.AsyncClient, populated_test_db):
         """Dashboard renders with articles in the DB."""
         resp = await client.get("/")
         assert resp.status_code == 200
@@ -1075,18 +1051,14 @@ class TestDashboardPagesWithData:
         # Should contain article titles
         assert "The Future of AI Agents" in body
 
-    async def test_dashboard_filter_by_tag(
-        self, client: httpx.AsyncClient, populated_test_db
-    ):
+    async def test_dashboard_filter_by_tag(self, client: httpx.AsyncClient, populated_test_db):
         """Dashboard filters by tag query param."""
         resp = await client.get("/", params={"tag": "ai-agents"})
         assert resp.status_code == 200
         body = resp.text
         assert "The Future of AI Agents" in body
 
-    async def test_dashboard_filter_by_tier(
-        self, client: httpx.AsyncClient, populated_test_db
-    ):
+    async def test_dashboard_filter_by_tier(self, client: httpx.AsyncClient, populated_test_db):
         """Dashboard filters by tier query param."""
         resp = await client.get("/", params={"tier": "low"})
         assert resp.status_code == 200
@@ -1094,17 +1066,13 @@ class TestDashboardPagesWithData:
         # Low tier article
         assert "Weekly Newsletter #42" in body
 
-    async def test_dashboard_sort_by_added(
-        self, client: httpx.AsyncClient, populated_test_db
-    ):
+    async def test_dashboard_sort_by_added(self, client: httpx.AsyncClient, populated_test_db):
         """Dashboard sorts by added date."""
         resp = await client.get("/", params={"sort": "added"})
         assert resp.status_code == 200
         assert "text/html" in resp.headers["content-type"]
 
-    async def test_dashboard_sort_by_published(
-        self, client: httpx.AsyncClient, populated_test_db
-    ):
+    async def test_dashboard_sort_by_published(self, client: httpx.AsyncClient, populated_test_db):
         """Dashboard sorts by published date."""
         resp = await client.get("/", params={"sort": "published"})
         assert resp.status_code == 200
@@ -1114,9 +1082,7 @@ class TestDashboardPagesWithData:
 class TestArticleDetailPage:
     """Test the /articles/{article_id} page route."""
 
-    async def test_article_detail_page(
-        self, client: httpx.AsyncClient, populated_test_db
-    ):
+    async def test_article_detail_page(self, client: httpx.AsyncClient, populated_test_db):
         """Article detail page renders for a valid article."""
         resp = await client.get("/articles/art-001")
         assert resp.status_code == 200
@@ -1178,9 +1144,7 @@ class TestUsagePage:
         assert resp.status_code == 200
         assert "text/html" in resp.headers["content-type"]
 
-    async def test_usage_page_with_data(
-        self, client: httpx.AsyncClient, populated_test_db
-    ):
+    async def test_usage_page_with_data(self, client: httpx.AsyncClient, populated_test_db):
         """Usage page renders with usage data present."""
         resp = await client.get("/usage")
         assert resp.status_code == 200
