@@ -1,7 +1,7 @@
 """Integration tests for scorer orchestration methods.
 
 Tests _process_documents, rescore_failed_articles, and recompute_priorities
-using FakeReadwiseService + mocked Anthropic + real in-memory SQLite.
+using fake Readwise, mocked Anthropic, and real in-memory SQLite.
 """
 
 import json
@@ -14,12 +14,7 @@ from sqlalchemy import select
 
 from app.models.article import Article, ArticleScore, Author
 from app.services.scorer import CURRENT_SCORING_VERSION, ArticleScorer
-from tests.factories import (
-    FakeReadwiseService,
-    make_claude_response,
-    make_document,
-    mock_anthropic_response,
-)
+from tests.factories import make_claude_response, make_document, mock_anthropic_response
 
 # Default Claude response produces: specificity=17, novelty=25, depth=25, actionability=25 → total=92
 _DEFAULT_TOTAL = 92
@@ -28,11 +23,6 @@ _DEFAULT_TOTAL = 92
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def fake_readwise():
-    return FakeReadwiseService()
 
 
 @pytest.fixture
@@ -448,7 +438,14 @@ class TestRescoreFailedArticles:
     async def test_rescores_content_fetch_failed_articles(self, scorer, fake_readwise, deps):
         sf = deps["session_factory"]
         await self._insert_article_with_score(
-            sf, "rescore-1", content_fetch_failed=True, info_score=0
+            sf,
+            "rescore-1",
+            content_fetch_failed=True,
+            info_score=0,
+            specificity_score=0,
+            novelty_score=0,
+            depth_score=0,
+            actionability_score=0,
         )
 
         doc = make_document(
@@ -466,7 +463,15 @@ class TestRescoreFailedArticles:
                 )
             ).scalar_one()
             assert score.info_score == _DEFAULT_TOTAL
+            assert score.specificity_score == 17
+            assert score.novelty_score == 25
+            assert score.depth_score == 25
+            assert score.actionability_score == 25
             assert score.content_fetch_failed is False
+            assert score.scoring_version == CURRENT_SCORING_VERSION
+            assert score.scored_at is not None
+            reasons = json.loads(score.score_reasons)
+            assert len(reasons) == 4
 
     async def test_rescores_bad_assessment_pattern_articles(self, scorer, fake_readwise, deps):
         sf = deps["session_factory"]
@@ -568,41 +573,6 @@ class TestRescoreFailedArticles:
         assert count == 1
         # sleep was called for the rate limit wait
         deps["sleep"].assert_awaited()
-
-    async def test_updates_existing_article_score_in_db(self, scorer, fake_readwise, deps):
-        sf = deps["session_factory"]
-        await self._insert_article_with_score(
-            sf,
-            "update-1",
-            content_fetch_failed=True,
-            info_score=0,
-            specificity_score=0,
-            novelty_score=0,
-            depth_score=0,
-            actionability_score=0,
-        )
-
-        doc = make_document(id="update-1", content="Real content now.")
-        fake_readwise.add_document(doc)
-
-        await scorer.rescore_failed_articles()
-
-        async with sf() as session:
-            score = (
-                await session.execute(
-                    select(ArticleScore).where(ArticleScore.article_id == "update-1")
-                )
-            ).scalar_one()
-            # Score should be updated to the default high score
-            assert score.info_score == _DEFAULT_TOTAL
-            assert score.specificity_score == 17
-            assert score.novelty_score == 25
-            assert score.depth_score == 25
-            assert score.actionability_score == 25
-            assert score.scoring_version == CURRENT_SCORING_VERSION
-            assert score.scored_at is not None
-            reasons = json.loads(score.score_reasons)
-            assert len(reasons) == 4
 
 
 # ---------------------------------------------------------------------------

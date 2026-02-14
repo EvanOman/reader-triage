@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from anthropic.types import TextBlock
 
-from app.models.article import Article, Author
+from app.models.article import Author
 from app.services.scorer import (
     _BAD_ASSESSMENT_PATTERNS,
     APPLICABLE_SCORES,
@@ -23,6 +23,16 @@ from app.services.scorer import (
     normalize_author_name,
 )
 from tests.factories import make_claude_response, make_document, mock_anthropic_response
+
+
+def _make_scorer_instance() -> ArticleScorer:
+    """Build a scorer instance with mocked dependencies (no Claude response configured)."""
+    with (
+        patch("app.services.scorer.Anthropic"),
+        patch("app.services.scorer.get_readwise_service"),
+    ):
+        return ArticleScorer()
+
 
 # ---------------------------------------------------------------------------
 # 1. Score calculation from categorical responses
@@ -250,30 +260,22 @@ class TestInfoScore:
 class TestContentIsStub:
     """Test _content_is_stub() method."""
 
-    def _make_scorer_instance(self) -> ArticleScorer:
-        """Build a scorer instance with mocked dependencies."""
-        with (
-            patch("app.services.scorer.Anthropic"),
-            patch("app.services.scorer.get_readwise_service"),
-        ):
-            return ArticleScorer()
-
     async def test_stub_when_actual_words_far_below_reported(self):
         """Content with < 15% of reported word count is a stub (for articles > 500 words)."""
-        scorer = self._make_scorer_instance()
+        scorer = _make_scorer_instance()
         # 1000 reported words, but content has only ~10 words -> 1% -> stub
         doc = make_document(word_count=1000, content="This is a very short stub of content.")
         assert scorer._content_is_stub(doc) is True
 
     async def test_not_stub_for_short_articles(self):
         """Articles with word_count <= 500 are never stubs (they are short by nature)."""
-        scorer = self._make_scorer_instance()
+        scorer = _make_scorer_instance()
         doc = make_document(word_count=400, content="Short article.")
         assert scorer._content_is_stub(doc) is False
 
     async def test_not_stub_when_content_proportional(self):
         """Content with >= 15% of reported word count is not a stub."""
-        scorer = self._make_scorer_instance()
+        scorer = _make_scorer_instance()
         # 1000 reported words, content has ~200 words -> 20% -> not a stub
         words = " ".join(["word"] * 200)
         doc = make_document(word_count=1000, content=words)
@@ -281,20 +283,20 @@ class TestContentIsStub:
 
     async def test_not_stub_when_no_word_count(self):
         """No reported word_count means we cannot determine stub."""
-        scorer = self._make_scorer_instance()
+        scorer = _make_scorer_instance()
         doc = make_document(word_count=None, content="Some content here.")
         assert scorer._content_is_stub(doc) is False
 
     async def test_not_stub_when_no_content(self):
         """Empty/None content still evaluates (0 words vs reported)."""
-        scorer = self._make_scorer_instance()
+        scorer = _make_scorer_instance()
         # word_count=1000, content="" -> 0 actual words -> 0% -> stub
         doc = make_document(word_count=1000, content="")
         assert scorer._content_is_stub(doc) is True
 
     async def test_stub_boundary_exactly_15_percent(self):
         """Exactly 15% is NOT a stub (only strictly below triggers it)."""
-        scorer = self._make_scorer_instance()
+        scorer = _make_scorer_instance()
         # word_count=1000, exactly 150 words -> 15% -> not a stub (>= not <)
         words = " ".join(["word"] * 150)
         doc = make_document(word_count=1000, content=words)
@@ -302,7 +304,7 @@ class TestContentIsStub:
 
     async def test_stub_just_under_15_percent(self):
         """Just under 15% IS a stub."""
-        scorer = self._make_scorer_instance()
+        scorer = _make_scorer_instance()
         # word_count=1000, 149 words -> 14.9% -> stub
         words = " ".join(["word"] * 149)
         doc = make_document(word_count=1000, content=words)
@@ -310,13 +312,13 @@ class TestContentIsStub:
 
     async def test_word_count_at_boundary_500(self):
         """word_count=500 does not trigger stub detection (must be > 500)."""
-        scorer = self._make_scorer_instance()
+        scorer = _make_scorer_instance()
         doc = make_document(word_count=500, content="short")
         assert scorer._content_is_stub(doc) is False
 
     async def test_word_count_at_501(self):
         """word_count=501 does trigger stub detection when content is short."""
-        scorer = self._make_scorer_instance()
+        scorer = _make_scorer_instance()
         doc = make_document(word_count=501, content="short")
         assert scorer._content_is_stub(doc) is True
 
@@ -378,13 +380,6 @@ class TestAssessmentBadContentDetection:
 class TestAuthorBoost:
     """Test _get_author_boost() threshold logic."""
 
-    def _make_scorer_instance(self) -> ArticleScorer:
-        with (
-            patch("app.services.scorer.Anthropic"),
-            patch("app.services.scorer.get_readwise_service"),
-        ):
-            return ArticleScorer()
-
     async def _insert_author(self, session, name: str, highlights: int) -> Author:
         author = Author(
             name=name,
@@ -396,306 +391,82 @@ class TestAuthorBoost:
         return author
 
     async def test_50_plus_highlights_gives_15(self, session):
-        scorer = self._make_scorer_instance()
+        scorer = _make_scorer_instance()
         await self._insert_author(session, "Prolific Author", 50)
         boost = await scorer._get_author_boost(session, "Prolific Author")
         assert boost == 15.0
 
     async def test_100_highlights_gives_15(self, session):
-        scorer = self._make_scorer_instance()
+        scorer = _make_scorer_instance()
         await self._insert_author(session, "Super Author", 100)
         boost = await scorer._get_author_boost(session, "Super Author")
         assert boost == 15.0
 
     async def test_20_plus_highlights_gives_10(self, session):
-        scorer = self._make_scorer_instance()
+        scorer = _make_scorer_instance()
         await self._insert_author(session, "Good Author", 20)
         boost = await scorer._get_author_boost(session, "Good Author")
         assert boost == 10.0
 
     async def test_10_plus_highlights_gives_7(self, session):
-        scorer = self._make_scorer_instance()
+        scorer = _make_scorer_instance()
         await self._insert_author(session, "Decent Author", 10)
         boost = await scorer._get_author_boost(session, "Decent Author")
         assert boost == 7.0
 
     async def test_5_plus_highlights_gives_5(self, session):
-        scorer = self._make_scorer_instance()
+        scorer = _make_scorer_instance()
         await self._insert_author(session, "Rising Author", 5)
         boost = await scorer._get_author_boost(session, "Rising Author")
         assert boost == 5.0
 
     async def test_2_plus_highlights_gives_3(self, session):
-        scorer = self._make_scorer_instance()
+        scorer = _make_scorer_instance()
         await self._insert_author(session, "New Author", 2)
         boost = await scorer._get_author_boost(session, "New Author")
         assert boost == 3.0
 
     async def test_1_highlight_gives_0(self, session):
-        scorer = self._make_scorer_instance()
+        scorer = _make_scorer_instance()
         await self._insert_author(session, "Rare Author", 1)
         boost = await scorer._get_author_boost(session, "Rare Author")
         assert boost == 0.0
 
     async def test_no_author_gives_0(self, session):
-        scorer = self._make_scorer_instance()
+        scorer = _make_scorer_instance()
         boost = await scorer._get_author_boost(session, None)
         assert boost == 0.0
 
     async def test_unknown_author_gives_0(self, session):
         """Author name not in the DB returns 0."""
-        scorer = self._make_scorer_instance()
+        scorer = _make_scorer_instance()
         boost = await scorer._get_author_boost(session, "Unknown Person")
         assert boost == 0.0
 
     async def test_author_name_case_insensitive(self, session):
         """Author lookup uses normalized (lowercase) name."""
-        scorer = self._make_scorer_instance()
+        scorer = _make_scorer_instance()
         await self._insert_author(session, "Jane Smith", 25)
         boost = await scorer._get_author_boost(session, "  Jane Smith  ")
         assert boost == 10.0
 
     async def test_threshold_boundary_49_highlights(self, session):
         """49 highlights should get +10, not +15."""
-        scorer = self._make_scorer_instance()
+        scorer = _make_scorer_instance()
         await self._insert_author(session, "Almost Prolific", 49)
         boost = await scorer._get_author_boost(session, "Almost Prolific")
         assert boost == 10.0
 
     async def test_threshold_boundary_19_highlights(self, session):
         """19 highlights should get +7, not +10."""
-        scorer = self._make_scorer_instance()
+        scorer = _make_scorer_instance()
         await self._insert_author(session, "Almost Good", 19)
         boost = await scorer._get_author_boost(session, "Almost Good")
         assert boost == 7.0
 
 
 # ---------------------------------------------------------------------------
-# 6. Content storage during scoring
-# ---------------------------------------------------------------------------
-
-
-class TestContentStorageDuringScoring:
-    """Test that scoring stores stripped content and backfills content_preview."""
-
-    @patch("app.services.scorer.log_usage", new_callable=AsyncMock)
-    @patch("app.services.scorer.upsert_fts_entry", new_callable=AsyncMock)
-    @patch("app.services.scorer.get_session_factory")
-    async def test_html_stripped_from_content(
-        self, mock_factory, mock_fts, mock_log_usage, session_factory
-    ):
-        """Scoring should strip HTML tags from content before storing on article."""
-        html_content = "<p>Hello <b>world</b></p> <div>Article body here.</div>"
-        expected_clean = "Hello world Article body here."
-
-        doc = make_document(id="html-test", content=html_content, word_count=100)
-
-        # Set up article in DB without content
-        async with session_factory() as session:
-            article = Article(
-                id="html-test",
-                title="HTML Test",
-                url="https://example.com/html",
-                author="Author",
-                word_count=100,
-                content=None,
-                content_preview=None,
-                location="new",
-                category="article",
-            )
-            session.add(article)
-            await session.commit()
-
-        # Simulate the content storage logic from _process_documents
-        async with session_factory() as session:
-            article = await session.get(Article, "html-test")
-            assert article is not None
-
-            # This mimics the logic in _process_documents lines 247-251
-            import re
-
-            if doc.content:
-                clean_text = re.sub(r"<[^>]+>", "", doc.content)
-                article.content = clean_text
-                if not article.content_preview:
-                    article.content_preview = clean_text[:2000]
-
-            await session.commit()
-
-        # Verify
-        async with session_factory() as session:
-            article = await session.get(Article, "html-test")
-            assert article.content == expected_clean
-            assert article.content_preview == expected_clean
-
-    @patch("app.services.scorer.log_usage", new_callable=AsyncMock)
-    @patch("app.services.scorer.upsert_fts_entry", new_callable=AsyncMock)
-    @patch("app.services.scorer.get_session_factory")
-    async def test_content_preview_not_overwritten_when_present(
-        self, mock_factory, mock_fts, mock_log_usage, session_factory
-    ):
-        """If content_preview already exists, it should NOT be overwritten."""
-        original_preview = "Original preview text"
-        doc = make_document(id="preview-test", content="<p>New content</p>", word_count=50)
-
-        async with session_factory() as session:
-            article = Article(
-                id="preview-test",
-                title="Preview Test",
-                url="https://example.com/preview",
-                author="Author",
-                word_count=50,
-                content=None,
-                content_preview=original_preview,
-                location="new",
-                category="article",
-            )
-            session.add(article)
-            await session.commit()
-
-        # Apply the content storage logic
-        async with session_factory() as session:
-            article = await session.get(Article, "preview-test")
-            import re
-
-            if doc.content:
-                clean_text = re.sub(r"<[^>]+>", "", doc.content)
-                article.content = clean_text
-                if not article.content_preview:
-                    article.content_preview = clean_text[:2000]
-            await session.commit()
-
-        # Verify preview was not overwritten
-        async with session_factory() as session:
-            article = await session.get(Article, "preview-test")
-            assert article.content == "New content"
-            assert article.content_preview == original_preview
-
-    @patch("app.services.scorer.log_usage", new_callable=AsyncMock)
-    @patch("app.services.scorer.upsert_fts_entry", new_callable=AsyncMock)
-    @patch("app.services.scorer.get_session_factory")
-    async def test_content_preview_backfilled_when_null(
-        self, mock_factory, mock_fts, mock_log_usage, session_factory
-    ):
-        """When content_preview is NULL, it gets backfilled with cleaned content."""
-        doc = make_document(id="backfill-test", content="<p>Rich article body text here</p>")
-
-        async with session_factory() as session:
-            article = Article(
-                id="backfill-test",
-                title="Backfill Test",
-                url="https://example.com/backfill",
-                author="Author",
-                word_count=200,
-                content=None,
-                content_preview=None,
-                location="new",
-                category="article",
-            )
-            session.add(article)
-            await session.commit()
-
-        # Apply the content storage logic
-        async with session_factory() as session:
-            article = await session.get(Article, "backfill-test")
-            import re
-
-            if doc.content:
-                clean_text = re.sub(r"<[^>]+>", "", doc.content)
-                article.content = clean_text
-                if not article.content_preview:
-                    article.content_preview = clean_text[:2000]
-            await session.commit()
-
-        async with session_factory() as session:
-            article = await session.get(Article, "backfill-test")
-            assert article.content == "Rich article body text here"
-            assert article.content_preview == "Rich article body text here"
-
-    @patch("app.services.scorer.log_usage", new_callable=AsyncMock)
-    @patch("app.services.scorer.upsert_fts_entry", new_callable=AsyncMock)
-    @patch("app.services.scorer.get_session_factory")
-    async def test_content_preview_truncated_at_2000_chars(
-        self, mock_factory, mock_fts, mock_log_usage, session_factory
-    ):
-        """Backfilled content_preview is truncated to 2000 characters."""
-        long_text = "A" * 5000
-        doc = make_document(id="truncate-test", content=long_text)
-
-        async with session_factory() as session:
-            article = Article(
-                id="truncate-test",
-                title="Truncate Test",
-                url="https://example.com/truncate",
-                author="Author",
-                word_count=1000,
-                content=None,
-                content_preview=None,
-                location="new",
-                category="article",
-            )
-            session.add(article)
-            await session.commit()
-
-        async with session_factory() as session:
-            article = await session.get(Article, "truncate-test")
-            import re
-
-            if doc.content:
-                clean_text = re.sub(r"<[^>]+>", "", doc.content)
-                article.content = clean_text
-                if not article.content_preview:
-                    article.content_preview = clean_text[:2000]
-            await session.commit()
-
-        async with session_factory() as session:
-            article = await session.get(Article, "truncate-test")
-            assert article.content == long_text  # full content stored
-            assert len(article.content_preview) == 2000
-
-    @patch("app.services.scorer.log_usage", new_callable=AsyncMock)
-    @patch("app.services.scorer.upsert_fts_entry", new_callable=AsyncMock)
-    @patch("app.services.scorer.get_session_factory")
-    async def test_no_content_stored_when_doc_content_is_none(
-        self, mock_factory, mock_fts, mock_log_usage, session_factory
-    ):
-        """When doc.content is None, article.content stays None."""
-        doc = make_document(id="none-test", content=None)
-
-        async with session_factory() as session:
-            article = Article(
-                id="none-test",
-                title="None Content Test",
-                url="https://example.com/none",
-                author="Author",
-                word_count=100,
-                content=None,
-                content_preview=None,
-                location="new",
-                category="article",
-            )
-            session.add(article)
-            await session.commit()
-
-        async with session_factory() as session:
-            article = await session.get(Article, "none-test")
-            import re
-
-            if doc.content:
-                clean_text = re.sub(r"<[^>]+>", "", doc.content)
-                article.content = clean_text
-                if not article.content_preview:
-                    article.content_preview = clean_text[:2000]
-            await session.commit()
-
-        async with session_factory() as session:
-            article = await session.get(Article, "none-test")
-            assert article.content is None
-            assert article.content_preview is None
-
-
-# ---------------------------------------------------------------------------
-# Additional: _score_document integration with mocked Claude API
+# 6. _score_document integration with mocked Claude API
 # ---------------------------------------------------------------------------
 
 
