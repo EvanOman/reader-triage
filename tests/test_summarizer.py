@@ -10,22 +10,7 @@ from app.services.summarizer import (
     Summarizer,
     SummaryResult,
 )
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _mock_anthropic_response(data: dict[str, object]) -> MagicMock:
-    """Create a mock Anthropic messages.create() return value."""
-    content_block = TextBlock(type="text", text=json.dumps(data))
-    usage = MagicMock()
-    usage.input_tokens = 400
-    usage.output_tokens = 150
-    response = MagicMock()
-    response.content = [content_block]
-    response.usage = usage
-    return response
+from tests.factories import mock_anthropic_response
 
 
 def _build_summarizer(claude_response_data: dict[str, object]) -> Summarizer:
@@ -35,7 +20,9 @@ def _build_summarizer(claude_response_data: dict[str, object]) -> Summarizer:
         patch("app.services.summarizer.get_readwise_service"),
     ):
         mock_client = MagicMock()
-        mock_client.messages.create.return_value = _mock_anthropic_response(claude_response_data)
+        mock_client.messages.create.return_value = mock_anthropic_response(
+            claude_response_data, input_tokens=400, output_tokens=150
+        )
         mock_anthropic_cls.return_value = mock_client
         summarizer = Summarizer()
     return summarizer
@@ -50,7 +37,9 @@ def _build_summarizer_with_readwise(
         patch("app.services.summarizer.get_readwise_service") as mock_rw,
     ):
         mock_client = MagicMock()
-        mock_client.messages.create.return_value = _mock_anthropic_response(claude_response_data)
+        mock_client.messages.create.return_value = mock_anthropic_response(
+            claude_response_data, input_tokens=400, output_tokens=150
+        )
         mock_anthropic_cls.return_value = mock_client
 
         mock_rw_service = AsyncMock()
@@ -145,7 +134,9 @@ class TestGenerateSummary:
             patch("app.services.summarizer.get_readwise_service"),
         ):
             mock_client = MagicMock()
-            mock_client.messages.create.return_value = _mock_anthropic_response(data)
+            mock_client.messages.create.return_value = mock_anthropic_response(
+                data, input_tokens=400, output_tokens=150
+            )
             mock_anthropic_cls.return_value = mock_client
             summarizer = Summarizer()
 
@@ -166,7 +157,9 @@ class TestGenerateSummary:
             patch("app.services.summarizer.get_readwise_service"),
         ):
             mock_client = MagicMock()
-            mock_client.messages.create.return_value = _mock_anthropic_response(data)
+            mock_client.messages.create.return_value = mock_anthropic_response(
+                data, input_tokens=400, output_tokens=150
+            )
             mock_anthropic_cls.return_value = mock_client
             summarizer = Summarizer()
 
@@ -257,7 +250,9 @@ class TestGenerateSummary:
             patch("app.services.summarizer.get_readwise_service"),
         ):
             mock_client = MagicMock()
-            mock_client.messages.create.return_value = _mock_anthropic_response(data)
+            mock_client.messages.create.return_value = mock_anthropic_response(
+                data, input_tokens=400, output_tokens=150
+            )
             mock_anthropic_cls.return_value = mock_client
             summarizer = Summarizer()
 

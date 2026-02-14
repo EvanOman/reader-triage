@@ -7,7 +7,6 @@ import pytest
 from anthropic.types import TextBlock
 
 from app.models.article import Article, Author
-from app.services.readwise import ReaderDocument
 from app.services.scorer import (
     _BAD_ASSESSMENT_PATTERNS,
     APPLICABLE_SCORES,
@@ -23,75 +22,7 @@ from app.services.scorer import (
     _assessment_indicates_bad_content,
     normalize_author_name,
 )
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_doc(
-    *,
-    id: str = "doc-1",
-    title: str = "Test Article",
-    url: str = "https://example.com/test",
-    author: str | None = "Author Name",
-    word_count: int | None = 2000,
-    content: str | None = "Some real content here. " * 100,
-    summary: str | None = None,
-    location: str | None = "new",
-) -> ReaderDocument:
-    """Build a minimal ReaderDocument for testing."""
-    return ReaderDocument(
-        id=id,
-        title=title,
-        url=url,
-        author=author,
-        word_count=word_count,
-        content=content,
-        summary=summary,
-        location=location,
-        category="article",
-        site_name="example.com",
-        reading_progress=0.0,
-        created_at=None,
-        updated_at=None,
-        published_date=None,
-    )
-
-
-def _make_claude_response(overrides: dict | None = None) -> dict:
-    """Build a Claude JSON response with sensible defaults."""
-    base = {
-        "standalone_passages": "several",
-        "quotability_reason": "Contains memorable phrasings",
-        "novel_framing": True,
-        "content_type": "original_analysis",
-        "surprise_reason": "Reframes familiar topic",
-        "author_conviction": True,
-        "practitioner_voice": True,
-        "content_completeness": "complete",
-        "argument_reason": "Strong conviction with evidence",
-        "named_framework": True,
-        "applicable_ideas": "broadly",
-        "insight_reason": "Broadly applicable framework",
-        "overall_assessment": "High value article with novel insights.",
-    }
-    if overrides:
-        base.update(overrides)
-    return base
-
-
-def _mock_anthropic_response(data: dict) -> MagicMock:
-    """Create a mock Anthropic messages.create() return value."""
-    content_block = TextBlock(type="text", text=json.dumps(data))
-    usage = MagicMock()
-    usage.input_tokens = 500
-    usage.output_tokens = 100
-    response = MagicMock()
-    response.content = [content_block]
-    response.usage = usage
-    return response
-
+from tests.factories import make_claude_response, make_document, mock_anthropic_response
 
 # ---------------------------------------------------------------------------
 # 1. Score calculation from categorical responses
@@ -138,7 +69,7 @@ class TestScoreCalculation:
     @patch("app.services.scorer.log_usage", new_callable=AsyncMock)
     async def test_max_score_all_categories(self, mock_log_usage):
         """All-max categorical answers produce (25+25+25+25) = 100."""
-        data = _make_claude_response(
+        data = make_claude_response(
             {
                 "standalone_passages": "many",  # 25
                 "novel_framing": True,  # 15
@@ -151,7 +82,7 @@ class TestScoreCalculation:
             }
         )
         scorer = _build_scorer(data)
-        doc = _make_doc()
+        doc = make_document()
         result = await scorer._score_document(doc)
 
         assert result is not None
@@ -164,7 +95,7 @@ class TestScoreCalculation:
     @patch("app.services.scorer.log_usage", new_callable=AsyncMock)
     async def test_min_score_all_categories(self, mock_log_usage):
         """All-min categorical answers produce 0."""
-        data = _make_claude_response(
+        data = make_claude_response(
             {
                 "standalone_passages": "none",
                 "novel_framing": False,
@@ -177,7 +108,7 @@ class TestScoreCalculation:
             }
         )
         scorer = _build_scorer(data)
-        doc = _make_doc()
+        doc = make_document()
         result = await scorer._score_document(doc)
 
         assert result is not None
@@ -190,7 +121,7 @@ class TestScoreCalculation:
     @patch("app.services.scorer.log_usage", new_callable=AsyncMock)
     async def test_mixed_score_calculation(self, mock_log_usage):
         """Mixed categoricals produce expected intermediate scores."""
-        data = _make_claude_response(
+        data = make_claude_response(
             {
                 "standalone_passages": "a_few",  # 9
                 "novel_framing": False,  # 0
@@ -203,7 +134,7 @@ class TestScoreCalculation:
             }
         )
         scorer = _build_scorer(data)
-        doc = _make_doc()
+        doc = make_document()
         result = await scorer._score_document(doc)
 
         assert result is not None
@@ -282,7 +213,7 @@ class TestInfoScore:
     async def test_score_clamped_to_0_25(self, mock_log_usage):
         """Scores from _score_document are clamped to [0, 25] per dimension."""
         # novel_framing(15) + original_analysis(10) = 25 -- at the max boundary
-        data = _make_claude_response(
+        data = make_claude_response(
             {
                 "standalone_passages": "many",  # 25 -- clamped to 25
                 "novel_framing": True,  # 15
@@ -295,7 +226,7 @@ class TestInfoScore:
             }
         )
         scorer = _build_scorer(data)
-        doc = _make_doc()
+        doc = make_document()
         result = await scorer._score_document(doc)
 
         assert result is not None
@@ -331,13 +262,13 @@ class TestContentIsStub:
         """Content with < 15% of reported word count is a stub (for articles > 500 words)."""
         scorer = self._make_scorer_instance()
         # 1000 reported words, but content has only ~10 words -> 1% -> stub
-        doc = _make_doc(word_count=1000, content="This is a very short stub of content.")
+        doc = make_document(word_count=1000, content="This is a very short stub of content.")
         assert scorer._content_is_stub(doc) is True
 
     async def test_not_stub_for_short_articles(self):
         """Articles with word_count <= 500 are never stubs (they are short by nature)."""
         scorer = self._make_scorer_instance()
-        doc = _make_doc(word_count=400, content="Short article.")
+        doc = make_document(word_count=400, content="Short article.")
         assert scorer._content_is_stub(doc) is False
 
     async def test_not_stub_when_content_proportional(self):
@@ -345,20 +276,20 @@ class TestContentIsStub:
         scorer = self._make_scorer_instance()
         # 1000 reported words, content has ~200 words -> 20% -> not a stub
         words = " ".join(["word"] * 200)
-        doc = _make_doc(word_count=1000, content=words)
+        doc = make_document(word_count=1000, content=words)
         assert scorer._content_is_stub(doc) is False
 
     async def test_not_stub_when_no_word_count(self):
         """No reported word_count means we cannot determine stub."""
         scorer = self._make_scorer_instance()
-        doc = _make_doc(word_count=None, content="Some content here.")
+        doc = make_document(word_count=None, content="Some content here.")
         assert scorer._content_is_stub(doc) is False
 
     async def test_not_stub_when_no_content(self):
         """Empty/None content still evaluates (0 words vs reported)."""
         scorer = self._make_scorer_instance()
         # word_count=1000, content="" -> 0 actual words -> 0% -> stub
-        doc = _make_doc(word_count=1000, content="")
+        doc = make_document(word_count=1000, content="")
         assert scorer._content_is_stub(doc) is True
 
     async def test_stub_boundary_exactly_15_percent(self):
@@ -366,7 +297,7 @@ class TestContentIsStub:
         scorer = self._make_scorer_instance()
         # word_count=1000, exactly 150 words -> 15% -> not a stub (>= not <)
         words = " ".join(["word"] * 150)
-        doc = _make_doc(word_count=1000, content=words)
+        doc = make_document(word_count=1000, content=words)
         assert scorer._content_is_stub(doc) is False
 
     async def test_stub_just_under_15_percent(self):
@@ -374,19 +305,19 @@ class TestContentIsStub:
         scorer = self._make_scorer_instance()
         # word_count=1000, 149 words -> 14.9% -> stub
         words = " ".join(["word"] * 149)
-        doc = _make_doc(word_count=1000, content=words)
+        doc = make_document(word_count=1000, content=words)
         assert scorer._content_is_stub(doc) is True
 
     async def test_word_count_at_boundary_500(self):
         """word_count=500 does not trigger stub detection (must be > 500)."""
         scorer = self._make_scorer_instance()
-        doc = _make_doc(word_count=500, content="short")
+        doc = make_document(word_count=500, content="short")
         assert scorer._content_is_stub(doc) is False
 
     async def test_word_count_at_501(self):
         """word_count=501 does trigger stub detection when content is short."""
         scorer = self._make_scorer_instance()
-        doc = _make_doc(word_count=501, content="short")
+        doc = make_document(word_count=501, content="short")
         assert scorer._content_is_stub(doc) is True
 
 
@@ -557,7 +488,7 @@ class TestContentStorageDuringScoring:
         html_content = "<p>Hello <b>world</b></p> <div>Article body here.</div>"
         expected_clean = "Hello world Article body here."
 
-        doc = _make_doc(id="html-test", content=html_content, word_count=100)
+        doc = make_document(id="html-test", content=html_content, word_count=100)
 
         # Set up article in DB without content
         async with session_factory() as session:
@@ -605,7 +536,7 @@ class TestContentStorageDuringScoring:
     ):
         """If content_preview already exists, it should NOT be overwritten."""
         original_preview = "Original preview text"
-        doc = _make_doc(id="preview-test", content="<p>New content</p>", word_count=50)
+        doc = make_document(id="preview-test", content="<p>New content</p>", word_count=50)
 
         async with session_factory() as session:
             article = Article(
@@ -647,7 +578,7 @@ class TestContentStorageDuringScoring:
         self, mock_factory, mock_fts, mock_log_usage, session_factory
     ):
         """When content_preview is NULL, it gets backfilled with cleaned content."""
-        doc = _make_doc(id="backfill-test", content="<p>Rich article body text here</p>")
+        doc = make_document(id="backfill-test", content="<p>Rich article body text here</p>")
 
         async with session_factory() as session:
             article = Article(
@@ -689,7 +620,7 @@ class TestContentStorageDuringScoring:
     ):
         """Backfilled content_preview is truncated to 2000 characters."""
         long_text = "A" * 5000
-        doc = _make_doc(id="truncate-test", content=long_text)
+        doc = make_document(id="truncate-test", content=long_text)
 
         async with session_factory() as session:
             article = Article(
@@ -729,7 +660,7 @@ class TestContentStorageDuringScoring:
         self, mock_factory, mock_fts, mock_log_usage, session_factory
     ):
         """When doc.content is None, article.content stays None."""
-        doc = _make_doc(id="none-test", content=None)
+        doc = make_document(id="none-test", content=None)
 
         async with session_factory() as session:
             article = Article(
@@ -775,7 +706,7 @@ def _build_scorer(claude_response_data: dict) -> ArticleScorer:
         patch("app.services.scorer.get_readwise_service"),
     ):
         mock_client = MagicMock()
-        mock_client.messages.create.return_value = _mock_anthropic_response(claude_response_data)
+        mock_client.messages.create.return_value = mock_anthropic_response(claude_response_data)
         mock_anthropic_cls.return_value = mock_client
         scorer = ArticleScorer()
     return scorer
@@ -788,7 +719,7 @@ class TestScoreDocumentIntegration:
     async def test_returns_none_for_empty_content(self, mock_log_usage):
         """Documents with no content and no summary return None."""
         scorer = _build_scorer({})
-        doc = _make_doc(content=None, summary=None)
+        doc = make_document(content=None, summary=None)
         result = await scorer._score_document(doc)
         assert result is None
 
@@ -796,7 +727,7 @@ class TestScoreDocumentIntegration:
     async def test_returns_none_for_blank_content(self, mock_log_usage):
         """Documents with blank content and no summary return None."""
         scorer = _build_scorer({})
-        doc = _make_doc(content="", summary=None)
+        doc = make_document(content="", summary=None)
         result = await scorer._score_document(doc)
         assert result is None
 
@@ -807,9 +738,11 @@ class TestScoreDocumentIntegration:
         Use word_count <= 500 to avoid triggering stub detection, which would
         short-circuit before the Claude API call.
         """
-        data = _make_claude_response({"standalone_passages": "a_few"})
+        data = make_claude_response({"standalone_passages": "a_few"})
         scorer = _build_scorer(data)
-        doc = _make_doc(content=None, summary="This is a summary of the article.", word_count=400)
+        doc = make_document(
+            content=None, summary="This is a summary of the article.", word_count=400
+        )
         result = await scorer._score_document(doc)
         assert result is not None
         assert result.specificity == 9  # a_few -> 9
@@ -819,7 +752,7 @@ class TestScoreDocumentIntegration:
         """Stub document with only summary returns content_fetch_failed InfoScore."""
         scorer = _build_scorer({})
         # word_count=2000 but only a short summary, no actual content
-        doc = _make_doc(word_count=2000, content=None, summary="Brief summary.")
+        doc = make_document(word_count=2000, content=None, summary="Brief summary.")
         result = await scorer._score_document(doc)
         assert result is not None
         assert result.content_fetch_failed is True
@@ -829,10 +762,12 @@ class TestScoreDocumentIntegration:
     @patch("app.services.scorer.log_usage", new_callable=AsyncMock)
     async def test_stub_with_content_marks_content_failed(self, mock_log_usage):
         """Stub that has content (but way too short) marks content_fetch_failed."""
-        data = _make_claude_response({"standalone_passages": "none"})
+        data = make_claude_response({"standalone_passages": "none"})
         scorer = _build_scorer(data)
         # word_count=2000 but content only has ~10 words
-        doc = _make_doc(word_count=2000, content="This is only ten words of content in total here.")
+        doc = make_document(
+            word_count=2000, content="This is only ten words of content in total here."
+        )
         result = await scorer._score_document(doc)
         assert result is not None
         assert result.content_fetch_failed is True
@@ -840,7 +775,7 @@ class TestScoreDocumentIntegration:
     @patch("app.services.scorer.log_usage", new_callable=AsyncMock)
     async def test_reasons_passed_through(self, mock_log_usage):
         """Reason strings from Claude response are passed through to InfoScore."""
-        data = _make_claude_response(
+        data = make_claude_response(
             {
                 "quotability_reason": "Great quotes",
                 "surprise_reason": "Very novel",
@@ -850,7 +785,7 @@ class TestScoreDocumentIntegration:
             }
         )
         scorer = _build_scorer(data)
-        doc = _make_doc()
+        doc = make_document()
         result = await scorer._score_document(doc)
 
         assert result is not None
@@ -863,7 +798,7 @@ class TestScoreDocumentIntegration:
     @patch("app.services.scorer.log_usage", new_callable=AsyncMock)
     async def test_handles_unknown_categorical_values_gracefully(self, mock_log_usage):
         """Unknown enum values should map to 0 via .get() defaults."""
-        data = _make_claude_response(
+        data = make_claude_response(
             {
                 "standalone_passages": "unknown_value",
                 "content_type": "unknown_type",
@@ -872,7 +807,7 @@ class TestScoreDocumentIntegration:
             }
         )
         scorer = _build_scorer(data)
-        doc = _make_doc()
+        doc = make_document()
         result = await scorer._score_document(doc)
 
         assert result is not None
@@ -883,7 +818,7 @@ class TestScoreDocumentIntegration:
     @patch("app.services.scorer.log_usage", new_callable=AsyncMock)
     async def test_handles_markdown_wrapped_json(self, mock_log_usage):
         """Claude sometimes wraps JSON in markdown code fences."""
-        data = _make_claude_response()
+        data = make_claude_response()
         with (
             patch("app.services.scorer.Anthropic") as mock_anthropic_cls,
             patch("app.services.scorer.get_readwise_service"),
@@ -900,7 +835,7 @@ class TestScoreDocumentIntegration:
             mock_anthropic_cls.return_value = mock_client
             scorer = ArticleScorer()
 
-        doc = _make_doc()
+        doc = make_document()
         result = await scorer._score_document(doc)
         assert result is not None
         assert result.total > 0

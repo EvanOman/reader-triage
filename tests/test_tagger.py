@@ -1,6 +1,5 @@
 """Tests for the article tagger service."""
 
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,22 +20,7 @@ from app.services.tagger import (
     get_tag_names,
     get_tag_styles,
 )
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _mock_anthropic_response(data: dict[str, object]) -> MagicMock:
-    """Create a mock Anthropic messages.create() return value."""
-    content_block = TextBlock(type="text", text=json.dumps(data))
-    usage = MagicMock()
-    usage.input_tokens = 300
-    usage.output_tokens = 50
-    response = MagicMock()
-    response.content = [content_block]
-    response.usage = usage
-    return response
+from tests.factories import mock_anthropic_response
 
 
 def _build_tagger(claude_response_data: dict[str, object]) -> ArticleTagger:
@@ -46,7 +30,9 @@ def _build_tagger(claude_response_data: dict[str, object]) -> ArticleTagger:
         patch("app.services.tagger.get_readwise_service"),
     ):
         mock_client = MagicMock()
-        mock_client.messages.create.return_value = _mock_anthropic_response(claude_response_data)
+        mock_client.messages.create.return_value = mock_anthropic_response(
+            claude_response_data, input_tokens=300, output_tokens=50
+        )
         mock_anthropic_cls.return_value = mock_client
         tagger = ArticleTagger()
     return tagger
@@ -61,7 +47,9 @@ def _build_tagger_with_readwise(
         patch("app.services.tagger.get_readwise_service") as mock_rw,
     ):
         mock_client = MagicMock()
-        mock_client.messages.create.return_value = _mock_anthropic_response(claude_response_data)
+        mock_client.messages.create.return_value = mock_anthropic_response(
+            claude_response_data, input_tokens=300, output_tokens=50
+        )
         mock_anthropic_cls.return_value = mock_client
 
         mock_rw_service = AsyncMock()
@@ -229,7 +217,9 @@ class TestClassifyArticle:
             patch("app.services.tagger.get_readwise_service"),
         ):
             mock_client = MagicMock()
-            mock_client.messages.create.return_value = _mock_anthropic_response(data)
+            mock_client.messages.create.return_value = mock_anthropic_response(
+                data, input_tokens=300, output_tokens=50
+            )
             mock_anthropic_cls.return_value = mock_client
             tagger = ArticleTagger()
 
@@ -249,7 +239,9 @@ class TestClassifyArticle:
             patch("app.services.tagger.get_readwise_service"),
         ):
             mock_client = MagicMock()
-            mock_client.messages.create.return_value = _mock_anthropic_response(data)
+            mock_client.messages.create.return_value = mock_anthropic_response(
+                data, input_tokens=300, output_tokens=50
+            )
             mock_anthropic_cls.return_value = mock_client
             tagger = ArticleTagger()
 

@@ -18,6 +18,7 @@ from app.models.article import (  # noqa: E402
     Base,
     Summary,
 )
+from tests.factories import FakeReadwiseService  # noqa: E402
 
 
 @pytest.fixture
@@ -41,6 +42,12 @@ async def engine():
 async def session_factory(engine):
     """Create a session factory bound to the test engine."""
     return async_sessionmaker(engine, expire_on_commit=False)
+
+
+@pytest.fixture
+def fake_readwise():
+    """Create a FakeReadwiseService for testing."""
+    return FakeReadwiseService()
 
 
 @pytest.fixture
