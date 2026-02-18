@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% from "_macros.html" import duration_badge %}
+
+{% block title %}{{ episode.title }} - Reader Triage{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto">
+    <!-- Back Link -->
+    <a href="{{ request.scope.get('root_path', '') }}/podcasts" class="text-xs text-gray-500 hover:text-gray-300 transition-colors mb-6 inline-flex items-center gap-1">
+        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+        Podcasts
+    </a>
+
+    <!-- Episode Header -->
+    <div class="bg-dark-card rounded-lg p-6 border border-dark-border fade-in">
+        <h1 class="text-xl font-semibold text-white leading-snug tracking-tight">{{ episode.title }}</h1>
+
+        <div class="flex items-center gap-1.5 mt-3 text-xs text-gray-400 flex-wrap">
+            {% if episode.podcast_title %}
+            <span>{{ episode.podcast_title }}</span>
+            {% endif %}
+            {{ duration_badge(episode.duration_seconds) }}
+            {% if episode.published_at %}
+            <span class="text-gray-600">/</span>
+            <span>Published {{ episode.published_at|shortdate }}</span>
+            {% endif %}
+        </div>
+
+        <div class="flex items-center gap-2 mt-3">
+            {% if episode.tags %}
+            <div class="flex flex-wrap gap-1.5">
+                {% for tag_slug in episode.tags %}
+                <a href="{{ request.scope.get('root_path', '') }}/podcasts?tag={{ tag_slug }}"
+                   class="text-[11px] font-medium px-2 py-0.5 rounded transition-opacity hover:opacity-80"
+                   style="{{ tag_styles[tag_slug] }}">
+                    {{ tag_names[tag_slug] }}
+                </a>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            {% if episode.transcript_source %}
+            <span class="text-[10px] uppercase tracking-wider text-gray-500 bg-white/[0.05] px-2 py-0.5 rounded-full font-medium">
+                {{ episode.transcript_source }}
+            </span>
+            {% endif %}
+        </div>
+
+        <button onclick="copyToSnipd()" id="copy-snipd-btn" class="text-xs text-accent/60 hover:text-accent transition-colors mt-3 block">
+            Copy to Snipd
+        </button>
+    </div>
+
+    <!-- Score Card -->
+    <div class="bg-dark-card rounded-lg p-6 border border-dark-border mt-3 fade-in fade-in-delay-1">
+        <!-- Score header with prominent number -->
+        <div class="flex items-center justify-between mb-6">
+            <h2 class="text-xs font-medium uppercase tracking-widest text-gray-500">Score</h2>
+            <div class="flex items-baseline gap-1">
+                <span class="text-3xl font-bold tabular-nums {% if episode.info_score >= 60 %}text-accent{% elif episode.info_score >= 30 %}text-gray-400{% else %}text-gray-600{% endif %}">{{ episode.info_score|int }}</span>
+                <span class="text-sm text-gray-600">/100</span>
+            </div>
+        </div>
+
+        <!-- Score Breakdown: unified accent color with opacity -->
+        <div class="space-y-4">
+            <div>
+                <div class="flex justify-between text-sm mb-1.5">
+                    <span class="text-gray-400">Quotability</span>
+                    <span class="text-gray-500 tabular-nums text-xs">{{ episode.specificity_score }}/25</span>
+                </div>
+                <div class="h-1.5 bg-white/[0.07] rounded-full overflow-hidden">
+                    <div class="h-full bg-accent/80 rounded-full score-bar" data-width="{{ (episode.specificity_score / 25 * 100)|int }}"></div>
+                </div>
+                {% if episode.score_reasons and episode.score_reasons|length > 0 %}
+                <p class="text-xs text-gray-500 mt-1.5 leading-relaxed">{{ episode.score_reasons[0] }}</p>
+                {% endif %}
+            </div>
+
+            <div>
+                <div class="flex justify-between text-sm mb-1.5">
+                    <span class="text-gray-400">Surprise Factor</span>
+                    <span class="text-gray-500 tabular-nums text-xs">{{ episode.novelty_score }}/25</span>
+                </div>
+                <div class="h-1.5 bg-white/[0.07] rounded-full overflow-hidden">
+                    <div class="h-full bg-accent/60 rounded-full score-bar" data-width="{{ (episode.novelty_score / 25 * 100)|int }}"></div>
+                </div>
+                {% if episode.score_reasons and episode.score_reasons|length > 1 %}
+                <p class="text-xs text-gray-500 mt-1.5 leading-relaxed">{{ episode.score_reasons[1] }}</p>
+                {% endif %}
+            </div>
+
+            <div>
+                <div class="flex justify-between text-sm mb-1.5">
+                    <span class="text-gray-400">Argument Quality</span>
+                    <span class="text-gray-500 tabular-nums text-xs">{{ episode.depth_score }}/25</span>
+                </div>
+                <div class="h-1.5 bg-white/[0.07] rounded-full overflow-hidden">
+                    <div class="h-full bg-accent/45 rounded-full score-bar" data-width="{{ (episode.depth_score / 25 * 100)|int }}"></div>
+                </div>
+                {% if episode.score_reasons and episode.score_reasons|length > 2 %}
+                <p class="text-xs text-gray-500 mt-1.5 leading-relaxed">{{ episode.score_reasons[2] }}</p>
+                {% endif %}
+            </div>
+
+            <div>
+                <div class="flex justify-between text-sm mb-1.5">
+                    <span class="text-gray-400">Applicable Insight</span>
+                    <span class="text-gray-500 tabular-nums text-xs">{{ episode.actionability_score }}/25</span>
+                </div>
+                <div class="h-1.5 bg-white/[0.07] rounded-full overflow-hidden">
+                    <div class="h-full bg-accent/30 rounded-full score-bar" data-width="{{ (episode.actionability_score / 25 * 100)|int }}"></div>
+                </div>
+                {% if episode.score_reasons and episode.score_reasons|length > 3 %}
+                <p class="text-xs text-gray-500 mt-1.5 leading-relaxed">{{ episode.score_reasons[3] }}</p>
+                {% endif %}
+            </div>
+        </div>
+
+        {% if episode.overall_assessment %}
+        <div class="mt-6 pt-5 border-t border-dark-border">
+            <h3 class="text-xs font-medium uppercase tracking-widest text-gray-500 mb-2">Assessment</h3>
+            <p class="text-sm text-gray-300 leading-relaxed">{{ episode.overall_assessment }}</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+    function copyToSnipd() {
+        const title = {{ episode.title|tojson }};
+        const podcastTitle = {{ episode.podcast_title|tojson }};
+        const text = title + ' \u2014 ' + podcastTitle;
+        navigator.clipboard.writeText(text).then(() => {
+            const btn = document.getElementById('copy-snipd-btn');
+            const original = btn.textContent;
+            btn.textContent = 'Copied!';
+            btn.classList.add('text-accent');
+            setTimeout(() => {
+                btn.textContent = original;
+                btn.classList.remove('text-accent');
+            }, 2000);
+        });
+    }
+</script>
+{% endblock %}

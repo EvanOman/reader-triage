@@ -13,6 +13,12 @@ from app.models.article import (
     ScoredArticle,
     Summary,
 )
+from app.models.podcast import (
+    Podcast,
+    PodcastEpisode,
+    PodcastEpisodeScore,
+    PodcastEpisodeTag,
+)
 
 __all__ = [
     "ApiUsageLog",
@@ -24,6 +30,10 @@ __all__ = [
     "Base",
     "ChatMessage",
     "ChatThread",
-    "ScoredArticle",  # Alias for backwards compatibility
+    "Podcast",
+    "PodcastEpisode",
+    "PodcastEpisodeScore",
+    "PodcastEpisodeTag",
+    "ScoredArticle",
     "Summary",
 ]

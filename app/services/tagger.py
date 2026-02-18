@@ -193,41 +193,117 @@ def get_tag_styles() -> dict[str, str]:
 
 CURRENT_TAGGING_VERSION = "v1"
 
-
-class ArticleTagger:
-    """Tags articles with predefined topic tags using Claude."""
-
-    TAGGING_PROMPT = """Classify this article into topic tags from the predefined list below.
-Multiple tags can and should be applied when an article covers multiple topics.
-For example, an article about building AI agents for startups should get both "ai-agents" and "startups".
+_TAGGING_PROMPT = """Classify this {content_type} into topic tags from the predefined list below.
+Multiple tags can and should be applied when content covers multiple topics.
+For example, content about building AI agents for startups should get both "ai-agents" and "startups".
 
 Available tags:
 {tag_catalog}
 
-Article Title: {title}
+Title: {title}
 Author: {author}
 
 Content:
 {content}
 
-Select ALL tags that meaningfully apply to this article's primary topics.
-Articles typically get 1-3 tags, sometimes more for cross-disciplinary pieces.
-Only select tags where the article substantially engages with that topic.
+Select ALL tags that meaningfully apply to the primary topics.
+Content typically gets 1-3 tags, sometimes more for cross-disciplinary pieces.
+Only select tags where the content substantially engages with that topic.
 
 Respond with ONLY a JSON object (no markdown, no extra text):
 {{"tags": ["tag-slug-1", "tag-slug-2"]}}"""
+
+_MAX_CONTENT_LENGTH: dict[str, int] = {
+    "article": 15000,
+    "podcast": 50000,
+}
+
+
+def _build_tag_catalog() -> str:
+    """Build the tag catalog string from TAG_DEFINITIONS."""
+    lines = []
+    for tag in TAG_DEFINITIONS:
+        lines.append(f"- {tag.slug}: {tag.description}")
+    return "\n".join(lines)
+
+
+_TAG_CATALOG = _build_tag_catalog()
+
+
+def classify_content(
+    title: str,
+    author: str | None,
+    content: str,
+    anthropic_client: Anthropic,
+    content_type_hint: str = "article",
+) -> tuple[list[str] | None, tuple[str, int, int] | None]:
+    """Classify content into topic tags using Claude.
+
+    Parameters:
+        title: Content title.
+        author: Content author (or None).
+        content: Text content to classify.
+        anthropic_client: Anthropic client instance.
+        content_type_hint: "article" or "podcast" — adjusts truncation limit and prompt.
+
+    Returns:
+        (validated_tag_slugs, (model, input_tokens, output_tokens)) or (None, None).
+    """
+    max_length = _MAX_CONTENT_LENGTH.get(content_type_hint, 15000)
+    if len(content) > max_length:
+        content = content[:max_length] + "... [truncated]"
+
+    content_type_label = (
+        "podcast episode transcript" if content_type_hint == "podcast" else "article"
+    )
+    prompt = _TAGGING_PROMPT.format(
+        content_type=content_type_label,
+        tag_catalog=_TAG_CATALOG,
+        title=title,
+        author=author or "Unknown",
+        content=content,
+    )
+
+    try:
+        model = "claude-sonnet-4-20250514"
+        response = anthropic_client.messages.create(
+            model=model,
+            max_tokens=200,
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        usage_info = (model, response.usage.input_tokens, response.usage.output_tokens)
+
+        first_block = response.content[0]
+        assert isinstance(first_block, TextBlock)
+        text = first_block.text.strip()
+        # Remove any markdown code blocks if present
+        if text.startswith("```"):
+            text = re.sub(r"```(?:json)?\n?", "", text)
+            text = text.strip()
+
+        data = json.loads(text)
+        raw_tags = data.get("tags", [])
+
+        # Validate slugs against registry
+        valid_tags = [slug for slug in raw_tags if slug in TAGS_BY_SLUG]
+        if len(valid_tags) != len(raw_tags):
+            invalid = set(raw_tags) - set(valid_tags)
+            logger.warning("Dropped invalid tag slugs: %s", invalid)
+
+        return valid_tags, usage_info
+    except Exception as e:
+        logger.exception("Error classifying content '%s': %s", title, e)
+        return None, None
+
+
+class ArticleTagger:
+    """Tags articles with predefined topic tags using Claude."""
 
     def __init__(self):
         settings = get_settings()
         self._anthropic = Anthropic(api_key=settings.anthropic_api_key)
         self._readwise = get_readwise_service()
-        self._tag_catalog = self._build_tag_catalog()
-
-    def _build_tag_catalog(self) -> str:
-        lines = []
-        for tag in TAG_DEFINITIONS:
-            lines.append(f"- {tag.slug}: {tag.description}")
-        return "\n".join(lines)
 
     async def tag_article(self, article_id: str, force: bool = False) -> list[str]:
         """Tag a single article. Returns list of tag slugs assigned.
@@ -348,48 +424,13 @@ Respond with ONLY a JSON object (no markdown, no extra text):
 
         Returns (validated_tag_slugs, (model, input_tokens, output_tokens)) or (None, None).
         """
-        max_content_length = 15000
-        if len(content) > max_content_length:
-            content = content[:max_content_length] + "... [truncated]"
-
-        prompt = self.TAGGING_PROMPT.format(
-            tag_catalog=self._tag_catalog,
+        return classify_content(
             title=title,
-            author=author or "Unknown",
+            author=author,
             content=content,
+            anthropic_client=self._anthropic,
+            content_type_hint="article",
         )
-
-        try:
-            model = "claude-sonnet-4-20250514"
-            response = self._anthropic.messages.create(
-                model=model,
-                max_tokens=200,
-                messages=[{"role": "user", "content": prompt}],
-            )
-
-            usage_info = (model, response.usage.input_tokens, response.usage.output_tokens)
-
-            first_block = response.content[0]
-            assert isinstance(first_block, TextBlock)
-            text = first_block.text.strip()
-            # Remove any markdown code blocks if present
-            if text.startswith("```"):
-                text = re.sub(r"```(?:json)?\n?", "", text)
-                text = text.strip()
-
-            data = json.loads(text)
-            raw_tags = data.get("tags", [])
-
-            # Validate slugs against registry
-            valid_tags = [slug for slug in raw_tags if slug in TAGS_BY_SLUG]
-            if len(valid_tags) != len(raw_tags):
-                invalid = set(raw_tags) - set(valid_tags)
-                logger.warning("Dropped invalid tag slugs: %s", invalid)
-
-            return valid_tags, usage_info
-        except Exception as e:
-            logger.exception("Error tagging article '%s': %s", title, e)
-            return None, None
 
 
 # Singleton instance

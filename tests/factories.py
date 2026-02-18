@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 from anthropic.types import TextBlock
 
+from app.models.podcast import PodcastEpisode
 from app.services.readwise import ReaderDocument
 
 
@@ -149,3 +150,33 @@ def mock_anthropic_response(
     response.content = [content_block]
     response.usage = usage
     return response
+
+
+def make_episode(
+    *,
+    id: int = 1,
+    podcast_id: int = 1,
+    guid: str = "ep-1",
+    title: str = "Test Episode",
+    audio_url: str | None = "https://example.com/ep.mp3",
+    duration_seconds: int | None = 3600,
+    published_at: object = None,
+    transcript: str | None = "Test transcript content. " * 50,
+    transcript_source: str | None = "youtube",
+    youtube_video_id: str | None = "vid123",
+    status: str = "transcript_ready",
+) -> PodcastEpisode:
+    """Build a PodcastEpisode with sensible defaults for testing."""
+    return PodcastEpisode(
+        id=id,
+        podcast_id=podcast_id,
+        guid=guid,
+        title=title,
+        audio_url=audio_url,
+        duration_seconds=duration_seconds,
+        published_at=published_at,
+        transcript=transcript,
+        transcript_source=transcript_source,
+        youtube_video_id=youtube_video_id,
+        status=status,
+    )

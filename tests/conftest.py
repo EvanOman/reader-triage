@@ -1,6 +1,7 @@
 """Shared test fixtures for reader_triage tests."""
 
 import os
+from datetime import datetime
 
 import pytest
 from sqlalchemy import text
@@ -17,6 +18,12 @@ from app.models.article import (  # noqa: E402
     ArticleTag,
     Base,
     Summary,
+)
+from app.models.podcast import (  # noqa: E402
+    Podcast,
+    PodcastEpisode,
+    PodcastEpisodeScore,
+    PodcastEpisodeTag,
 )
 from tests.factories import FakeReadwiseService  # noqa: E402
 
@@ -197,5 +204,71 @@ async def populated_db(session, sample_article, sample_score):
     session.add(score4)
     session.add(summary4)
 
+    await session.commit()
+    return session
+
+
+# ---------------------------------------------------------------------------
+# Podcast fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def sample_podcast() -> Podcast:
+    """Create a sample podcast for testing."""
+    return Podcast(
+        id=1,
+        title="Dwarkesh Podcast",
+        feed_url="https://api.substack.com/feed/podcast/69345.rss",
+        youtube_channel_id="UCXl4i9dYBrFOabk0xGmbkRA",
+        youtube_channel_name="Dwarkesh Patel",
+        mapping_confirmed=True,
+    )
+
+
+@pytest.fixture
+def sample_episode() -> PodcastEpisode:
+    """Create a sample podcast episode for testing."""
+    return PodcastEpisode(
+        id=1,
+        podcast_id=1,
+        guid="episode-guid-001",
+        title="Dario Amodei -- Scaling and Safety",
+        audio_url="https://example.com/episode.mp3",
+        duration_seconds=5400,  # 1h 30m
+        published_at=datetime(2026, 1, 15),
+        transcript="This is a test transcript with enough content to score. " * 50,
+        transcript_source="youtube",
+        youtube_video_id="abc123",
+        status="transcript_ready",
+    )
+
+
+@pytest.fixture
+def sample_episode_score() -> PodcastEpisodeScore:
+    """Create a sample episode score for testing."""
+    return PodcastEpisodeScore(
+        episode_id=1,
+        specificity_score=20,
+        novelty_score=18,
+        depth_score=22,
+        actionability_score=15,
+        score_reasons='["Quotable passages", "Novel framing", "Strong argument", "Applicable insight"]',
+        overall_assessment="Excellent deep-dive interview on AI scaling.",
+        model_used="claude-sonnet-4-20250514",
+        scoring_version="v2-categorical",
+    )
+
+
+@pytest.fixture
+async def populated_podcast_db(session, sample_podcast, sample_episode, sample_episode_score):
+    """Set up a DB with sample podcast data."""
+    session.add(sample_podcast)
+    await session.flush()
+    session.add(sample_episode)
+    await session.flush()
+    session.add(sample_episode_score)
+    tag = PodcastEpisodeTag(episode_id=1, tag_slug="agi-scaling", tagging_version="v1")
+    session.add(tag)
     await session.commit()
     return session

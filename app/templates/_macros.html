@@ -1,0 +1,18 @@
+{# Shared macros for podcast templates #}
+
+{% macro duration_badge(duration_seconds) %}
+{% if duration_seconds %}
+{% set h = duration_seconds // 3600 %}
+{% set m = (duration_seconds % 3600) // 60 %}
+{% set dur_label %}{% if h > 0 %}{{ h }}h {{ '%02d'|format(m) }}m{% else %}{{ m }}m{% endif %}{% endset %}
+{% if duration_seconds < 1800 %}
+<span class="text-[10px] font-medium px-2 py-0.5 rounded-full bg-teal-500/15 text-teal-400">{{ dur_label|trim }}</span>
+{% elif duration_seconds < 3600 %}
+<span class="text-[10px] font-medium px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-400">{{ dur_label|trim }}</span>
+{% elif duration_seconds < 7200 %}
+<span class="text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400">{{ dur_label|trim }}</span>
+{% else %}
+<span class="text-[10px] font-medium px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-400">{{ dur_label|trim }}</span>
+{% endif %}
+{% endif %}
+{% endmacro %}

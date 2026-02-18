@@ -10,7 +10,7 @@ from datetime import datetime
 from anthropic import Anthropic
 from anthropic.types import TextBlock
 from readwise_sdk.exceptions import RateLimitError
-from sqlalchemy import or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -37,15 +37,116 @@ CONTENT_TYPE_SCORES = {
     "product_review": 2,
     "news_or_roundup": 0,
 }
+PODCAST_CONTENT_TYPE_SCORES = {
+    "deep_dive_interview": 10,
+    "experienced_practitioner_sharing": 10,
+    "news_commentary": 3,
+    "casual_conversation": 2,
+    "solo_essay": 8,
+}
 
 # Argument bucket (→ depth_score, 0-25)
 AUTHOR_CONVICTION_POINTS = 12
 PRACTITIONER_VOICE_POINTS = 8
 COMPLETENESS_SCORES = {"complete": 5, "appears_truncated": 2, "summary_or_excerpt": 0}
+PODCAST_COMPLETENESS_SCORES = {"complete": 5, "partial": 2, "low_quality": 0}
 
 # Insight bucket (→ actionability_score, 0-25)
 NAMED_FRAMEWORK_POINTS = 12
 APPLICABLE_SCORES = {"broadly": 13, "narrowly": 7, "not_really": 0}
+
+# ---------------------------------------------------------------------------
+# Parameterized scoring prompt: Q3 (content type) and Q6 (completeness)
+# vary by content type (article vs podcast).
+# ---------------------------------------------------------------------------
+
+Q3_ARTICLE = (
+    "3. CONTENT TYPE: What best describes this content?\n"
+    "   Options: original_analysis / opinion_with_evidence"
+    " / informational_summary / product_review / news_or_roundup"
+)
+Q3_PODCAST = (
+    "3. CONTENT TYPE: What best describes this podcast episode?\n"
+    "   Options: deep_dive_interview / experienced_practitioner_sharing"
+    " / news_commentary / casual_conversation / solo_essay"
+)
+
+Q6_ARTICLE = (
+    "6. CONTENT COMPLETENESS: Does the available text appear to be a complete piece?\n"
+    "   Options: complete / appears_truncated / summary_or_excerpt"
+)
+Q6_PODCAST = (
+    "6. TRANSCRIPT QUALITY: Does the transcript appear to be a complete episode?\n"
+    "   Options: complete / partial / low_quality"
+)
+
+# JSON response snippets for Q3 and Q6 (embedded in the prompt's response template)
+_Q3_JSON_ARTICLE = (
+    '"content_type": "<original_analysis|opinion_with_evidence'
+    '|informational_summary|product_review|news_or_roundup>"'
+)
+_Q3_JSON_PODCAST = (
+    '"content_type": "<deep_dive_interview|experienced_practitioner_sharing'
+    '|news_commentary|casual_conversation|solo_essay>"'
+)
+_Q6_JSON_ARTICLE = '"content_completeness": "<complete|appears_truncated|summary_or_excerpt>"'
+_Q6_JSON_PODCAST = '"content_completeness": "<complete|partial|low_quality>"'
+
+_SCORING_PROMPT_TEMPLATE = """Evaluate this {content_label} for capture value — how likely a reader is to want to save and highlight passages.
+
+Answer each question by selecting from the provided options.
+
+1. STANDALONE PASSAGES: How many passages could stand alone as a saved note — a memorable phrasing, crisp claim, or striking example worth revisiting?
+   Options: none / a_few / several / many
+
+2. NOVEL FRAMING: Does it reframe a familiar topic or present a surprising, unexpected lens for understanding something?
+   Options: true / false
+
+{q3}
+
+4. AUTHOR CONVICTION: Does the author argue for a clear position with conviction, rather than just reporting or summarizing?
+   Options: true / false
+
+5. PRACTITIONER VOICE: Is this written from first-person practitioner experience sharing hard-won opinions?
+   Options: true / false
+
+{q6}
+
+7. NAMED FRAMEWORK: Does it introduce or organize around a named concept, framework, or mental model?
+   Options: true / false
+
+8. APPLICABLE IDEAS: Could a reader apply ideas from this in their own work or thinking?
+   Options: broadly / narrowly / not_really
+
+{{content_warning}}Article Title: {{title}}
+Author: {{author}}
+Word Count: {{word_count}}
+
+Content:
+{{content}}
+
+Respond with ONLY a JSON object (no markdown, no extra text):
+{{{{"standalone_passages": "<none|a_few|several|many>", "quotability_reason": "<brief reason>", "novel_framing": <true or false>, {q3_json}, "surprise_reason": "<brief reason>", "author_conviction": <true or false>, "practitioner_voice": <true or false>, {q6_json}, "argument_reason": "<brief reason>", "named_framework": <true or false>, "applicable_ideas": "<broadly|narrowly|not_really>", "insight_reason": "<brief reason>", "overall_assessment": "<1-2 sentence summary>"}}}}"""
+
+# Pre-built prompt templates for each content type
+_ARTICLE_SCORING_PROMPT = _SCORING_PROMPT_TEMPLATE.format(
+    content_label="article",
+    q3=Q3_ARTICLE,
+    q6=Q6_ARTICLE,
+    q3_json=_Q3_JSON_ARTICLE,
+    q6_json=_Q6_JSON_ARTICLE,
+)
+
+_PODCAST_SCORING_PROMPT = _SCORING_PROMPT_TEMPLATE.format(
+    content_label="podcast episode transcript",
+    q3=Q3_PODCAST,
+    q6=Q6_PODCAST,
+    q3_json=_Q3_JSON_PODCAST,
+    q6_json=_Q6_JSON_PODCAST,
+)
+
+# Max content truncation lengths per content type
+_MAX_CONTENT_LENGTH = {"article": 15000, "podcast": 50000}
 
 
 @dataclass
@@ -105,46 +206,125 @@ def _assessment_indicates_bad_content(assessment: str) -> bool:
     return any(p in text for p in _BAD_ASSESSMENT_PATTERNS)
 
 
+async def score_content(
+    *,
+    title: str,
+    author: str | None,
+    content: str,
+    word_count: int | None,
+    content_type_hint: str,
+    anthropic_client: Anthropic,
+    entity_id: str,
+    content_warning: str = "",
+) -> InfoScore | None:
+    """Score content for capture value using Claude.
+
+    Shared scoring logic used by both ArticleScorer and PodcastScorer.
+    Does NOT handle stub detection — callers must handle that article-specific
+    concern before calling this function.
+
+    Args:
+        title: Title of the content.
+        author: Author or host name (may be None).
+        content: The text content to score (already extracted by caller).
+        word_count: Reported word count (may be None).
+        content_type_hint: "article" or "podcast" — selects prompt variant and mappings.
+        anthropic_client: Anthropic client instance.
+        entity_id: ID string for usage logging (article ID or episode ID).
+        content_warning: Optional warning text prepended to the article metadata in the
+            prompt (used for truncated article content). Empty string by default.
+
+    Returns:
+        InfoScore or None if scoring failed.
+    """
+    if not content:
+        return None
+
+    # Select prompt template and score mappings based on content type
+    if content_type_hint == "podcast":
+        scoring_prompt = _PODCAST_SCORING_PROMPT
+        content_type_scores = PODCAST_CONTENT_TYPE_SCORES
+        completeness_scores = PODCAST_COMPLETENESS_SCORES
+    else:
+        scoring_prompt = _ARTICLE_SCORING_PROMPT
+        content_type_scores = CONTENT_TYPE_SCORES
+        completeness_scores = COMPLETENESS_SCORES
+
+    # Truncate content if too long
+    max_content_length = _MAX_CONTENT_LENGTH.get(content_type_hint, 15000)
+    if len(content) > max_content_length:
+        content = content[:max_content_length] + "... [truncated]"
+
+    prompt = scoring_prompt.format(
+        title=title,
+        author=author or "Unknown",
+        word_count=word_count or "Unknown",
+        content=content,
+        content_warning=content_warning,
+    )
+
+    try:
+        model = "claude-sonnet-4-20250514"
+        response = anthropic_client.messages.create(
+            model=model,
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        # Log usage
+        service = "podcast_scorer" if content_type_hint == "podcast" else "scorer"
+        await log_usage(
+            service=service,
+            model=model,
+            input_tokens=response.usage.input_tokens,
+            output_tokens=response.usage.output_tokens,
+            article_id=entity_id,
+        )
+
+        first_block = response.content[0]
+        assert isinstance(first_block, TextBlock)
+        text = first_block.text.strip()
+        if text.startswith("```"):
+            text = re.sub(r"```(?:json)?\n?", "", text)
+            text = text.strip()
+
+        data = json.loads(text)
+
+        # Map categorical responses to numeric scores
+        quotability = STANDALONE_SCORES.get(data.get("standalone_passages", "none"), 0)
+        surprise = (NOVEL_FRAMING_POINTS if data.get("novel_framing") else 0) + (
+            content_type_scores.get(data.get("content_type", ""), 0)
+        )
+        argument = (
+            (AUTHOR_CONVICTION_POINTS if data.get("author_conviction") else 0)
+            + (PRACTITIONER_VOICE_POINTS if data.get("practitioner_voice") else 0)
+            + completeness_scores.get(data.get("content_completeness", ""), 0)
+        )
+        insight = (NAMED_FRAMEWORK_POINTS if data.get("named_framework") else 0) + (
+            APPLICABLE_SCORES.get(data.get("applicable_ideas", ""), 0)
+        )
+
+        return InfoScore(
+            specificity=min(25, max(0, quotability)),
+            specificity_reason=data.get("quotability_reason", ""),
+            novelty=min(25, max(0, surprise)),
+            novelty_reason=data.get("surprise_reason", ""),
+            depth=min(25, max(0, argument)),
+            depth_reason=data.get("argument_reason", ""),
+            actionability=min(25, max(0, insight)),
+            actionability_reason=data.get("insight_reason", ""),
+            overall_assessment=data.get("overall_assessment", ""),
+        )
+    except Exception as e:
+        logger.error("Error scoring content %s: %s", entity_id, e)
+        return None
+
+
 class ArticleScorer:
     """Scores articles by capture value using Claude."""
 
-    SCORING_PROMPT = """Evaluate this article for capture value — how likely a reader is to want to save and highlight passages.
-
-Answer each question by selecting from the provided options.
-
-1. STANDALONE PASSAGES: How many passages could stand alone as a saved note — a memorable phrasing, crisp claim, or striking example worth revisiting?
-   Options: none / a_few / several / many
-
-2. NOVEL FRAMING: Does it reframe a familiar topic or present a surprising, unexpected lens for understanding something?
-   Options: true / false
-
-3. CONTENT TYPE: What best describes this content?
-   Options: original_analysis / opinion_with_evidence / informational_summary / product_review / news_or_roundup
-
-4. AUTHOR CONVICTION: Does the author argue for a clear position with conviction, rather than just reporting or summarizing?
-   Options: true / false
-
-5. PRACTITIONER VOICE: Is this written from first-person practitioner experience sharing hard-won opinions?
-   Options: true / false
-
-6. CONTENT COMPLETENESS: Does the available text appear to be a complete piece?
-   Options: complete / appears_truncated / summary_or_excerpt
-
-7. NAMED FRAMEWORK: Does it introduce or organize around a named concept, framework, or mental model?
-   Options: true / false
-
-8. APPLICABLE IDEAS: Could a reader apply ideas from this in their own work or thinking?
-   Options: broadly / narrowly / not_really
-
-{content_warning}Article Title: {title}
-Author: {author}
-Word Count: {word_count}
-
-Content:
-{content}
-
-Respond with ONLY a JSON object (no markdown, no extra text):
-{{"standalone_passages": "<none|a_few|several|many>", "quotability_reason": "<brief reason>", "novel_framing": <true or false>, "content_type": "<original_analysis|opinion_with_evidence|informational_summary|product_review|news_or_roundup>", "surprise_reason": "<brief reason>", "author_conviction": <true or false>, "practitioner_voice": <true or false>, "content_completeness": "<complete|appears_truncated|summary_or_excerpt>", "argument_reason": "<brief reason>", "named_framework": <true or false>, "applicable_ideas": "<broadly|narrowly|not_really>", "insight_reason": "<brief reason>", "overall_assessment": "<1-2 sentence summary>"}}"""
+    # Keep SCORING_PROMPT as a class attribute for backward compatibility with tests
+    SCORING_PROMPT = _ARTICLE_SCORING_PROMPT
 
     # Author boost: points added to priority score based on author highlight count
     AUTHOR_BOOST_THRESHOLDS = [
@@ -408,20 +588,32 @@ Respond with ONLY a JSON object (no markdown, no extra text):
         factory = await get_session_factory()
 
         # Step 1: Collect article IDs to rescore (short-lived query session)
-        # Only rescore articles that have explicit content failures OR
-        # low scores with bad assessment patterns (not high-scoring articles
-        # that happen to contain words like "incomplete")
+        # Rescore articles with:
+        #   - explicit content fetch failures, OR
+        #   - bad assessment patterns (truncated/incomplete mentions), OR
+        #   - missing DB content despite significant reported word count
+        #     (articles scored on summary text rather than full content)
+        # Only rescore low-scoring articles (< 60) to avoid re-evaluating
+        # articles that scored well despite bad patterns.
         async with factory() as session:
-            pattern_conditions = []
-            for p in _BAD_ASSESSMENT_PATTERNS:
-                pattern_conditions.append(ArticleScore.overall_assessment.like(f"%{p}%"))
             result = await session.execute(
-                select(ArticleScore.article_id).where(
+                select(ArticleScore.article_id)
+                .join(Article, Article.id == ArticleScore.article_id)
+                .where(
                     or_(
                         ArticleScore.content_fetch_failed == True,  # noqa: E712
                         *(
                             ArticleScore.overall_assessment.like(f"%{p}%")
                             for p in _BAD_ASSESSMENT_PATTERNS
+                        ),
+                        # Catch articles scored on summary text: no stored
+                        # content but Readwise reports significant word count
+                        and_(
+                            or_(
+                                Article.content.is_(None),
+                                func.length(Article.content) < 200,
+                            ),
+                            Article.word_count > 200,
                         ),
                     ),
                     # Don't rescore articles that already have good scores
@@ -459,15 +651,24 @@ Respond with ONLY a JSON object (no markdown, no extra text):
                     )
                     continue
 
-                # Skip if Readwise still doesn't have real content —
-                # don't overwrite existing score with a worse 0
+                # If Readwise still has no content, don't re-score but
+                # ensure the article is properly flagged so the UI can
+                # distinguish "scored on summary" from "genuinely low value".
                 if not full_doc.content:
                     logger.info(
-                        "Skipping rescore of %s (%d/%d): Readwise has no content",
+                        "Flagging %s (%d/%d) as content_fetch_failed: Readwise has no content",
                         article_id,
                         i + 1,
                         len(article_ids),
                     )
+                    async with factory() as session:
+                        result = await session.execute(
+                            select(ArticleScore).where(ArticleScore.article_id == article_id)
+                        )
+                        existing = result.scalar_one_or_none()
+                        if existing and not existing.content_fetch_failed:
+                            existing.content_fetch_failed = True
+                            await session.commit()
                     continue
 
                 # Score with Claude
@@ -495,6 +696,14 @@ Respond with ONLY a JSON object (no markdown, no extra text):
                         continue
 
                     article = await session.get(Article, article_id)
+                    # Save content to article if we got real content this time
+                    if article and full_doc.content and not article.content:
+                        clean_text = re.sub(r"<[^>]+>", "", full_doc.content)
+                        if clean_text.strip():
+                            article.content = clean_text
+                            if not article.content_preview:
+                                article.content_preview = clean_text[:2000]
+
                     author_boost = await self._get_author_boost(
                         session, article.author if article else None
                     )
@@ -577,13 +786,20 @@ Respond with ONLY a JSON object (no markdown, no extra text):
     def _content_is_stub(self, doc: ReaderDocument) -> bool:
         """Check if fetched content is too short relative to reported word count."""
         content = doc.content or ""
-        actual_words = len(content.split())
+        # Strip HTML tags before counting — raw HTML inflates word count
+        # and can hide that the actual text is just a short description.
+        clean = re.sub(r"<[^>]+>", "", content)
+        actual_words = len(clean.split())
         if doc.word_count and doc.word_count > 500 and actual_words < doc.word_count * 0.15:
             return True
         return False
 
     async def _score_document(self, doc: ReaderDocument) -> InfoScore | None:
-        """Score a document using Claude."""
+        """Score a document using Claude.
+
+        Handles article-specific concerns (stub detection, content_warning,
+        content_fetch_failed) and delegates to the shared score_content().
+        """
         content = doc.content or doc.summary or ""
         if not content:
             return None
@@ -618,80 +834,28 @@ Respond with ONLY a JSON object (no markdown, no extra text):
                 "available, but note this limitation in your assessment.\n\n"
             )
 
-        # Truncate content if too long
-        max_content_length = 15000
-        if len(content) > max_content_length:
-            content = content[:max_content_length] + "... [truncated]"
-
-        prompt = self.SCORING_PROMPT.format(
+        result = await score_content(
             title=doc.title,
-            author=doc.author or "Unknown",
-            word_count=doc.word_count or "Unknown",
+            author=doc.author,
             content=content,
+            word_count=doc.word_count,
+            content_type_hint="article",
+            anthropic_client=self._anthropic,
+            entity_id=doc.id,
             content_warning=content_warning,
         )
 
-        try:
-            model = "claude-sonnet-4-20250514"
-            response = self._anthropic.messages.create(
-                model=model,
-                max_tokens=700,
-                messages=[{"role": "user", "content": prompt}],
-            )
-
-            # Log usage
-            await log_usage(
-                service="scorer",
-                model=model,
-                input_tokens=response.usage.input_tokens,
-                output_tokens=response.usage.output_tokens,
-                article_id=doc.id,
-            )
-
-            first_block = response.content[0]
-            assert isinstance(first_block, TextBlock)
-            text = first_block.text.strip()
-            if text.startswith("```"):
-                text = re.sub(r"```(?:json)?\n?", "", text)
-                text = text.strip()
-
-            data = json.loads(text)
-
-            # Map categorical responses to numeric scores
-            quotability = STANDALONE_SCORES.get(data.get("standalone_passages", "none"), 0)
-            surprise = (NOVEL_FRAMING_POINTS if data.get("novel_framing") else 0) + (
-                CONTENT_TYPE_SCORES.get(data.get("content_type", ""), 0)
-            )
-            argument = (
-                (AUTHOR_CONVICTION_POINTS if data.get("author_conviction") else 0)
-                + (PRACTITIONER_VOICE_POINTS if data.get("practitioner_voice") else 0)
-                + COMPLETENESS_SCORES.get(data.get("content_completeness", ""), 0)
-            )
-            insight = (
-                NAMED_FRAMEWORK_POINTS if data.get("named_framework") else 0
-            ) + APPLICABLE_SCORES.get(data.get("applicable_ideas", ""), 0)
-
-            # Detect genuine content fetch failure — only when the content
-            # we got from Readwise was incomplete, NOT when the scorer
-            # intentionally truncated long content for prompt size limits,
-            # and NOT when the content is short by nature (highlights/notes).
-            content_failed = is_stub
-
-            return InfoScore(
-                specificity=min(25, max(0, quotability)),
-                specificity_reason=data.get("quotability_reason", ""),
-                novelty=min(25, max(0, surprise)),
-                novelty_reason=data.get("surprise_reason", ""),
-                depth=min(25, max(0, argument)),
-                depth_reason=data.get("argument_reason", ""),
-                actionability=min(25, max(0, insight)),
-                actionability_reason=data.get("insight_reason", ""),
-                overall_assessment=data.get("overall_assessment", ""),
-                content_fetch_failed=content_failed,
-            )
-        except Exception as e:
-            logger.error("Error scoring document %s: %s", doc.id, e)
+        if result is None:
             return None
+
+        # Detect genuine content fetch failure — only when the content
+        # we got from Readwise was incomplete, NOT when the scorer
+        # intentionally truncated long content for prompt size limits,
+        # and NOT when the content is short by nature (highlights/notes).
+        if is_stub:
+            result.content_fetch_failed = True
+
+        return result
 
 
 # Singleton instance

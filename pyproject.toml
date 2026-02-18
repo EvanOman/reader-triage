@@ -21,6 +21,9 @@ dependencies = [
     "qdrant-client>=1.16.2",
     "sentence-transformers>=5.2.2",
     "einops>=0.8.2",
+    "feedparser>=6.0.0",
+    "youtube-transcript-api>=1.2.0",
+    "groq>=0.25.0",
 ]
 
 [build-system]

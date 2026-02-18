@@ -1,0 +1,649 @@
+{% extends "base.html" %}
+{% from "_macros.html" import duration_badge %}
+
+{% block title %}Podcasts - Reader Triage{% endblock %}
+
+{% block content %}
+<div class="space-y-8">
+    <!-- Stats Row -->
+    <div class="grid grid-cols-4 gap-3 fade-in">
+        <button onclick="filterByTier(null)" class="tier-filter-btn bg-dark-card rounded-lg px-4 py-3 border transition-colors text-left {% if not active_tier %}border-accent/40{% else %}border-dark-border hover:border-dark-hover{% endif %}" data-tier="">
+            <div class="text-xl font-semibold text-white tabular-nums">{{ stats.total_scored }}</div>
+            <div class="text-xs text-gray-500 mt-0.5">Total</div>
+        </button>
+        <button onclick="filterByTier('high')" class="tier-filter-btn bg-dark-card rounded-lg px-4 py-3 border transition-colors text-left {% if active_tier == 'high' %}border-accent/40{% else %}border-dark-border hover:border-dark-hover{% endif %}" data-tier="high">
+            <div class="text-xl font-semibold text-accent tabular-nums">{{ stats.high_value_count }}</div>
+            <div class="text-xs text-gray-500 mt-0.5">High Value</div>
+        </button>
+        <button onclick="filterByTier('medium')" class="tier-filter-btn bg-dark-card rounded-lg px-4 py-3 border transition-colors text-left {% if active_tier == 'medium' %}border-accent/40{% else %}border-dark-border hover:border-dark-hover{% endif %}" data-tier="medium">
+            <div class="text-xl font-semibold text-gray-400 tabular-nums">{{ stats.medium_value_count }}</div>
+            <div class="text-xs text-gray-500 mt-0.5">Medium</div>
+        </button>
+        <button onclick="filterByTier('low')" class="tier-filter-btn bg-dark-card rounded-lg px-4 py-3 border transition-colors text-left {% if active_tier == 'low' %}border-accent/40{% else %}border-dark-border hover:border-dark-hover{% endif %}" data-tier="low">
+            <div class="text-xl font-semibold text-gray-500 tabular-nums">{{ stats.low_value_count }}</div>
+            <div class="text-xs text-gray-500 mt-0.5">Low</div>
+        </button>
+    </div>
+
+    <!-- Tag Filters -->
+    {% if available_tags %}
+    <div class="flex flex-wrap items-center gap-1.5 fade-in">
+        <button onclick="filterByTag(null)"
+            class="tag-filter-btn text-[11px] font-medium px-2.5 py-1 rounded-full transition-colors
+            {% if not active_tag %}bg-accent/20 text-accent{% else %}bg-white/5 text-gray-500 hover:text-gray-300{% endif %}"
+            data-tag="">
+            All
+        </button>
+        {% for tag in available_tags %}
+        <button onclick="filterByTag('{{ tag.slug }}')"
+            class="tag-filter-btn text-[11px] font-medium px-2.5 py-1 rounded-full transition-colors
+            {% if active_tag == tag.slug %}{% else %}bg-white/5 text-gray-500 hover:text-gray-300{% endif %}"
+            data-tag="{{ tag.slug }}"
+            {% if active_tag == tag.slug %}style="{{ tag_styles[tag.slug] }}"{% endif %}>
+            {{ tag.name }} <span class="{% if active_tag == tag.slug %}opacity-50{% else %}text-gray-600{% endif %} ml-0.5">{{ tag.count }}</span>
+        </button>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Search + Episodes Section -->
+    <div>
+        <div class="flex items-center gap-3 mb-3 fade-in">
+            <h2 class="text-xs font-medium uppercase tracking-widest text-gray-500">Episodes</h2>
+            <span id="search-count" class="hidden text-[11px] text-gray-500 tabular-nums"></span>
+            <div class="flex items-center gap-0.5 ml-auto bg-dark-card border border-dark-border rounded-md p-0.5">
+                <button onclick="setSort('score')" data-sort="score" class="sort-btn text-[11px] font-medium px-2 py-1 rounded transition-colors {% if not active_sort or active_sort == 'score' %}bg-accent/20 text-accent{% else %}text-gray-500 hover:text-gray-300{% endif %}">Score</button>
+                <button onclick="setSort('published')" data-sort="published" class="sort-btn text-[11px] font-medium px-2 py-1 rounded transition-colors {% if active_sort == 'published' %}bg-accent/20 text-accent{% else %}text-gray-500 hover:text-gray-300{% endif %}">Published</button>
+                <button onclick="setSort('duration')" data-sort="duration" class="sort-btn text-[11px] font-medium px-2 py-1 rounded transition-colors {% if active_sort == 'duration' %}bg-accent/20 text-accent{% else %}text-gray-500 hover:text-gray-300{% endif %}">Duration</button>
+            </div>
+            <div class="flex-1 max-w-sm relative">
+                <svg class="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                <input id="search-input" type="text" placeholder="Search episodes..."
+                    class="w-full bg-dark-card border border-dark-border rounded-md pl-8 pr-3 py-1.5 text-sm text-gray-300 placeholder-gray-600 focus:outline-none focus:border-accent/40 transition-colors"
+                    autocomplete="off" spellcheck="false">
+                <span id="search-clear" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-600 hover:text-gray-400 cursor-pointer hidden text-xs">&times;</span>
+            </div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="flex items-center gap-2 mb-3 fade-in">
+            <button id="sync-podcasts-btn" onclick="syncPodcasts()" class="scan-btn bg-accent hover:bg-accent-dim text-white px-3.5 py-1 rounded-md text-xs font-medium flex items-center gap-2">
+                <svg id="sync-spinner" class="animate-spin h-3 w-3 text-white hidden" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <span id="sync-btn-text">Sync Podcasts</span>
+            </button>
+            <a href="{{ request.scope.get('root_path', '') }}/podcasts/import" class="bg-dark-card hover:bg-dark-hover text-gray-400 hover:text-white px-3.5 py-1 rounded-md text-xs font-medium border border-dark-border transition-colors">
+                Manage Podcasts
+            </a>
+        </div>
+
+        {% if episodes %}
+        <div id="episodes-list" class="space-y-2">
+            {% for episode in episodes %}
+            <a href="{{ request.scope.get('root_path', '') }}/podcasts/episodes/{{ episode.id }}" class="group article-card bg-dark-card rounded-lg border border-dark-border block fade-in fade-in-delay-{{ loop.index }}">
+                <div class="px-5 py-4">
+                    <div class="flex items-start justify-between gap-6">
+                        <div class="flex-1 min-w-0">
+                            <div class="text-[15px] font-medium text-gray-100 leading-snug truncate">
+                                {{ episode.title }}
+                            </div>
+                            <div class="flex items-center gap-1.5 mt-1.5 text-xs text-gray-400">
+                                {% if episode.podcast_title %}
+                                <span>{{ episode.podcast_title }}</span>
+                                {% endif %}
+                                {{ duration_badge(episode.duration_seconds) }}
+                                {% if episode.published_at %}
+                                <span class="text-gray-600">/</span>
+                                <span>Published {{ episode.published_at|shortdate }}</span>
+                                {% endif %}
+                            </div>
+                            {% if episode.tags %}
+                            <div class="flex flex-wrap gap-1 mt-1.5">
+                                {% for tag_slug in episode.tags %}
+                                <span onclick="event.stopPropagation(); event.preventDefault(); filterByTag('{{ tag_slug }}')"
+                                    class="text-[10px] font-medium px-1.5 py-0.5 rounded cursor-pointer transition-opacity hover:opacity-80"
+                                    style="{{ tag_styles[tag_slug] }}">
+                                    {{ tag_names[tag_slug] }}
+                                </span>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+                        </div>
+
+                        <!-- Score: single prominent number with sub-score dots -->
+                        <div class="flex-shrink-0 flex items-center gap-3">
+                            <div class="hidden sm:flex items-center gap-2">
+                                <div class="flex flex-col items-center gap-0.5" title="Quotability: {{ episode.specificity_score }}/25">
+                                    <div class="w-1 rounded-full {% if episode.specificity_score >= 19 %}bg-accent h-4{% elif episode.specificity_score >= 13 %}bg-accent/60 h-3{% else %}bg-accent/25 h-2{% endif %}"></div>
+                                </div>
+                                <div class="flex flex-col items-center gap-0.5" title="Surprise: {{ episode.novelty_score }}/25">
+                                    <div class="w-1 rounded-full {% if episode.novelty_score >= 19 %}bg-accent h-4{% elif episode.novelty_score >= 13 %}bg-accent/60 h-3{% else %}bg-accent/25 h-2{% endif %}"></div>
+                                </div>
+                                <div class="flex flex-col items-center gap-0.5" title="Argument: {{ episode.depth_score }}/25">
+                                    <div class="w-1 rounded-full {% if episode.depth_score >= 19 %}bg-accent h-4{% elif episode.depth_score >= 13 %}bg-accent/60 h-3{% else %}bg-accent/25 h-2{% endif %}"></div>
+                                </div>
+                                <div class="flex flex-col items-center gap-0.5" title="Insight: {{ episode.actionability_score }}/25">
+                                    <div class="w-1 rounded-full {% if episode.actionability_score >= 19 %}bg-accent h-4{% elif episode.actionability_score >= 13 %}bg-accent/60 h-3{% else %}bg-accent/25 h-2{% endif %}"></div>
+                                </div>
+                            </div>
+
+                            <div class="w-10 text-right">
+                                <span class="text-lg font-semibold tabular-nums {% if episode.info_score >= 60 %}text-accent{% elif episode.info_score >= 30 %}text-gray-400{% else %}text-gray-600{% endif %}">{{ episode.info_score|int }}</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    {% if episode.overall_assessment %}
+                    <p class="mt-2.5 text-xs text-gray-400 leading-relaxed line-clamp-2">{{ episode.overall_assessment }}</p>
+                    {% endif %}
+
+                    <div class="flex items-center gap-3 mt-2.5">
+                        <span class="text-xs text-accent/70 hover:text-accent transition-colors copy-snipd-btn"
+                            onclick="event.preventDefault(); event.stopPropagation(); copyToSnipd(this, '{{ episode.title|e }}', '{{ episode.podcast_title|e }}')">
+                            Copy to Snipd
+                        </span>
+                        <button onclick="event.stopPropagation(); event.preventDefault(); markListened({{ episode.id }}, this)"
+                            class="ml-auto text-gray-600 hover:text-emerald-400 transition-colors opacity-0 group-hover:opacity-100 p-1"
+                            title="Mark as listened">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                        </button>
+                    </div>
+                </div>
+            </a>
+            {% endfor %}
+        </div>
+
+        <!-- Load More Button -->
+        <div id="load-more-container" class="mt-6 text-center">
+            <button id="load-more-btn" class="bg-dark-card hover:bg-dark-hover text-gray-400 hover:text-white px-6 py-2 rounded-lg text-xs font-medium border border-dark-border transition-colors inline-flex items-center gap-2">
+                <svg id="load-more-spinner" class="animate-spin h-3 w-3 hidden" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <span id="load-more-text">Load More</span>
+            </button>
+        </div>
+        {% else %}
+        <div class="bg-dark-card rounded-lg p-12 border border-dark-border text-center fade-in">
+            <p class="text-gray-500 text-sm mb-4">No episodes scored yet.</p>
+            <a href="{{ request.scope.get('root_path', '') }}/podcasts/import" class="bg-accent hover:bg-accent-dim text-white px-4 py-2 rounded-md text-sm font-medium transition-colors inline-block">
+                Import Podcasts
+            </a>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+    const EPISODES_ROOT = '{{ request.scope.get("root_path", "") }}';
+    const PAGE_SIZE = 30;
+    const TAG_NAMES = {{ tag_names_json|safe }};
+    const TAG_COLORS = {{ tag_colors_json|safe }};
+
+    const COLOR_MAP = {
+        blue:    { bg: 'rgba(59,130,246,0.15)',  text: '#93c5fd' },
+        indigo:  { bg: 'rgba(99,102,241,0.15)',  text: '#a5b4fc' },
+        red:     { bg: 'rgba(239,68,68,0.15)',   text: '#fca5a5' },
+        cyan:    { bg: 'rgba(6,182,212,0.15)',    text: '#67e8f9' },
+        violet:  { bg: 'rgba(139,92,246,0.15)',   text: '#c4b5fd' },
+        sky:     { bg: 'rgba(14,165,233,0.15)',   text: '#7dd3fc' },
+        teal:    { bg: 'rgba(20,184,166,0.15)',   text: '#5eead4' },
+        amber:   { bg: 'rgba(245,158,11,0.15)',   text: '#fcd34d' },
+        emerald: { bg: 'rgba(16,185,129,0.15)',   text: '#6ee7b7' },
+        orange:  { bg: 'rgba(249,115,22,0.15)',   text: '#fdba74' },
+        lime:    { bg: 'rgba(132,204,22,0.15)',   text: '#bef264' },
+        yellow:  { bg: 'rgba(234,179,8,0.15)',    text: '#fde047' },
+        rose:    { bg: 'rgba(244,63,94,0.15)',    text: '#fda4af' },
+        green:   { bg: 'rgba(34,197,94,0.15)',    text: '#86efac' },
+        slate:   { bg: 'rgba(148,163,184,0.15)',  text: '#cbd5e1' },
+        fuchsia: { bg: 'rgba(217,70,239,0.15)',   text: '#f0abfc' },
+        pink:    { bg: 'rgba(236,72,153,0.15)',   text: '#f9a8d4' },
+    };
+    const FALLBACK_COLOR = { bg: 'rgba(124,107,245,0.15)', text: '#a5a0f3' };
+
+    function tagStyle(slug) {
+        const colorName = TAG_COLORS[slug];
+        const c = COLOR_MAP[colorName] || FALLBACK_COLOR;
+        return `background:${c.bg}; color:${c.text}`;
+    }
+
+    // --- State ---
+    let allEpisodes = [];
+    let dataReady = false;
+    let activeTag = {{ ("'" + active_tag + "'")|safe if active_tag else 'null' }};
+    let activeTier = {{ ("'" + active_tier + "'")|safe if active_tier else 'null' }};
+    let activeSort = '{{ active_sort or "score" }}';
+    let searchQuery = '';
+    let visibleCount = PAGE_SIZE;
+
+    // --- Helpers ---
+    function escapeHtml(text) {
+        if (!text) return '';
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    function barLevel(score) {
+        if (score >= 19) return { cls: 'bg-accent', h: 'h-4' };
+        if (score >= 13) return { cls: 'bg-accent/60', h: 'h-3' };
+        return { cls: 'bg-accent/25', h: 'h-2' };
+    }
+
+    function scoreColorClass(score) {
+        if (score >= 60) return 'text-accent';
+        if (score >= 30) return 'text-gray-400';
+        return 'text-gray-600';
+    }
+
+    function formatDate(dateStr) {
+        if (!dateStr) return '';
+        const d = new Date(dateStr);
+        const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        const now = new Date();
+        if (d.getFullYear() === now.getFullYear()) {
+            return months[d.getMonth()] + ' ' + d.getDate();
+        }
+        return months[d.getMonth()] + ' ' + d.getDate() + ', ' + d.getFullYear();
+    }
+
+    function formatDuration(seconds) {
+        if (!seconds) return '';
+        const h = Math.floor(seconds / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        if (h > 0) return h + 'h ' + String(m).padStart(2, '0') + 'm';
+        return m + 'm';
+    }
+
+    function copyToSnipd(el, title, podcastTitle) {
+        const text = title + ' \u2014 ' + podcastTitle;
+        navigator.clipboard.writeText(text).then(() => {
+            const original = el.textContent;
+            el.textContent = 'Copied!';
+            el.classList.add('text-accent');
+            setTimeout(() => {
+                el.textContent = original;
+                el.classList.remove('text-accent');
+            }, 2000);
+        });
+    }
+
+    async function markListened(episodeId, btn) {
+        try {
+            const response = await fetch(`${EPISODES_ROOT}/api/podcasts/episodes/${episodeId}/listened`, { method: 'POST' });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+            // Find the card element and fade it out
+            const card = btn.closest('.article-card');
+            if (card) {
+                card.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
+                card.style.opacity = '0';
+                card.style.transform = 'translateX(20px)';
+                setTimeout(() => card.remove(), 300);
+            }
+
+            // Update local data
+            const ep = allEpisodes.find(e => e.id === episodeId);
+            if (ep) ep.listened = true;
+        } catch (err) {
+            console.error('Failed to mark as listened:', err);
+        }
+    }
+
+    function durationBadge(seconds) {
+        if (!seconds) return '';
+        const label = formatDuration(seconds);
+        let color;
+        if (seconds < 1800) color = 'teal';
+        else if (seconds < 3600) color = 'blue';
+        else if (seconds < 7200) color = 'amber';
+        else color = 'orange';
+        const colorMap = {
+            teal: 'background:rgba(20,184,166,0.15); color:#2dd4bf',
+            blue: 'background:rgba(59,130,246,0.15); color:#60a5fa',
+            amber: 'background:rgba(245,158,11,0.15); color:#fbbf24',
+            orange: 'background:rgba(249,115,22,0.15); color:#fb923c',
+        };
+        return `<span class="text-[10px] font-medium px-2 py-0.5 rounded-full" style="${colorMap[color]}">${label}</span>`;
+    }
+
+    function createEpisodeCard(ep) {
+        const scoreColor = scoreColorClass(ep.info_score);
+        const showHtml = ep.podcast_title ? `<span>${escapeHtml(ep.podcast_title)}</span>` : '';
+        const durationHtml = durationBadge(ep.duration_seconds);
+        const publishedHtml = ep.published_at ? `<span class="text-gray-600">/</span><span>Published ${formatDate(ep.published_at)}</span>` : '';
+        const assessmentHtml = ep.overall_assessment ? `<p class="mt-2.5 text-xs text-gray-400 leading-relaxed line-clamp-2">${escapeHtml(ep.overall_assessment)}</p>` : '';
+        const tagsHtml = (ep.tags || []).length > 0 ? `<div class="flex flex-wrap gap-1 mt-1.5">${(ep.tags || []).map(slug =>
+            `<span onclick="event.stopPropagation(); event.preventDefault(); filterByTag('${slug}')"
+                class="text-[10px] font-medium px-1.5 py-0.5 rounded cursor-pointer transition-opacity hover:opacity-80"
+                style="${tagStyle(slug)}">${TAG_NAMES[slug] || slug}</span>`
+        ).join('')}</div>` : '';
+
+        const q = barLevel(ep.specificity_score);
+        const s = barLevel(ep.novelty_score);
+        const ar = barLevel(ep.depth_score);
+        const ins = barLevel(ep.actionability_score);
+
+        const escapedTitle = escapeHtml(ep.title).replace(/'/g, "\\'");
+        const escapedPodcast = escapeHtml(ep.podcast_title || '').replace(/'/g, "\\'");
+        const listenedClass = ep.listened ? ' opacity-60' : '';
+
+        const el = document.createElement('a');
+        el.href = `${EPISODES_ROOT}/podcasts/episodes/${ep.id}`;
+        el.className = 'group article-card bg-dark-card rounded-lg border border-dark-border block' + listenedClass;
+        el.dataset.episodeId = ep.id;
+        el.innerHTML = `
+            <div class="px-5 py-4">
+                <div class="flex items-start justify-between gap-6">
+                    <div class="flex-1 min-w-0">
+                        <div class="text-[15px] font-medium text-gray-100 leading-snug truncate">${escapeHtml(ep.title)}</div>
+                        <div class="flex items-center gap-1.5 mt-1.5 text-xs text-gray-400">${showHtml}${durationHtml}${publishedHtml}</div>
+                        ${tagsHtml}
+                    </div>
+                    <div class="flex-shrink-0 flex items-center gap-3">
+                        <div class="hidden sm:flex items-center gap-2">
+                            <div class="flex flex-col items-center gap-0.5" title="Quotability: ${ep.specificity_score}/25"><div class="w-1 rounded-full ${q.cls} ${q.h}"></div></div>
+                            <div class="flex flex-col items-center gap-0.5" title="Surprise: ${ep.novelty_score}/25"><div class="w-1 rounded-full ${s.cls} ${s.h}"></div></div>
+                            <div class="flex flex-col items-center gap-0.5" title="Argument: ${ep.depth_score}/25"><div class="w-1 rounded-full ${ar.cls} ${ar.h}"></div></div>
+                            <div class="flex flex-col items-center gap-0.5" title="Insight: ${ep.actionability_score}/25"><div class="w-1 rounded-full ${ins.cls} ${ins.h}"></div></div>
+                        </div>
+                        <div class="w-10 text-right"><span class="text-lg font-semibold tabular-nums ${scoreColor}">${Math.round(ep.info_score)}</span></div>
+                    </div>
+                </div>
+                ${assessmentHtml}
+                <div class="flex items-center gap-3 mt-2.5">
+                    <span class="text-xs text-accent/70 hover:text-accent transition-colors copy-snipd-btn"
+                        onclick="event.stopPropagation(); event.preventDefault(); copyToSnipd(this, '${escapedTitle}', '${escapedPodcast}')">Copy to Snipd</span>
+                    ${ep.listened ? '<span class="text-[10px] font-medium px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 ml-auto">Listened</span>' :
+                    `<button onclick="event.stopPropagation(); event.preventDefault(); markListened(${ep.id}, this)"
+                        class="ml-auto text-gray-600 hover:text-emerald-400 transition-colors opacity-0 group-hover:opacity-100 p-1"
+                        title="Mark as listened">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                    </button>`}
+                </div>
+            </div>`;
+        return el;
+    }
+
+    // --- Client-side filtering ---
+    function getFilteredEpisodes() {
+        let results = allEpisodes;
+
+        if (activeTag) {
+            results = results.filter(ep => (ep.tags || []).includes(activeTag));
+        }
+
+        if (activeTier === 'high') {
+            results = results.filter(ep => ep.info_score >= 60);
+        } else if (activeTier === 'medium') {
+            results = results.filter(ep => ep.info_score >= 30 && ep.info_score < 60);
+        } else if (activeTier === 'low') {
+            results = results.filter(ep => ep.info_score < 30);
+        }
+
+        if (searchQuery) {
+            const q = searchQuery.toLowerCase();
+            const terms = q.split(/\s+/).filter(Boolean);
+            results = results.filter(ep => {
+                const haystack = ((ep.title || '') + ' ' + (ep.podcast_title || '')).toLowerCase();
+                return terms.every(t => haystack.includes(t));
+            });
+        }
+
+        return results;
+    }
+
+    function setSort(sortKey) {
+        activeSort = sortKey;
+        updateUrl();
+        visibleCount = PAGE_SIZE;
+
+        document.querySelectorAll('.sort-btn').forEach(btn => {
+            const btnSort = btn.dataset.sort;
+            if (btnSort === activeSort) {
+                btn.classList.remove('text-gray-500', 'hover:text-gray-300');
+                btn.classList.add('bg-accent/20', 'text-accent');
+            } else {
+                btn.classList.remove('bg-accent/20', 'text-accent');
+                btn.classList.add('text-gray-500', 'hover:text-gray-300');
+            }
+        });
+
+        if (dataReady) renderEpisodes();
+    }
+
+    function renderEpisodes() {
+        const list = document.getElementById('episodes-list');
+        const container = document.getElementById('load-more-container');
+        if (!list) return;
+
+        const filtered = sortEpisodes(getFilteredEpisodes());
+        const toShow = filtered.slice(0, visibleCount);
+
+        list.innerHTML = '';
+        for (const ep of toShow) {
+            list.appendChild(createEpisodeCard(ep));
+        }
+
+        if (container) {
+            const hasMore = filtered.length > visibleCount;
+            container.classList.toggle('hidden', !hasMore);
+            const btnText = document.getElementById('load-more-text');
+            if (btnText && hasMore) {
+                btnText.textContent = `Show More (${filtered.length - visibleCount} remaining)`;
+            }
+        }
+
+        const countEl = document.getElementById('search-count');
+        if (countEl) {
+            if (searchQuery || activeTag || activeTier) {
+                countEl.textContent = `${filtered.length} result${filtered.length !== 1 ? 's' : ''}`;
+                countEl.classList.remove('hidden');
+            } else {
+                countEl.classList.add('hidden');
+            }
+        }
+    }
+
+    function sortEpisodes(episodes) {
+        const sorted = [...episodes];
+        if (activeSort === 'published') {
+            sorted.sort((a, b) => {
+                const da = a.published_at ? new Date(a.published_at).getTime() : 0;
+                const db = b.published_at ? new Date(b.published_at).getTime() : 0;
+                return db - da;
+            });
+        } else if (activeSort === 'duration') {
+            sorted.sort((a, b) => {
+                return (b.duration_seconds || 0) - (a.duration_seconds || 0);
+            });
+        } else {
+            sorted.sort((a, b) => {
+                return (b.info_score || 0) - (a.info_score || 0);
+            });
+        }
+        return sorted;
+    }
+
+    function updateUrl() {
+        const url = new URL(window.location);
+        if (activeTag) { url.searchParams.set('tag', activeTag); } else { url.searchParams.delete('tag'); }
+        if (activeTier) { url.searchParams.set('tier', activeTier); } else { url.searchParams.delete('tier'); }
+        if (activeSort && activeSort !== 'score') { url.searchParams.set('sort', activeSort); } else { url.searchParams.delete('sort'); }
+        window.history.replaceState({}, '', url);
+    }
+
+    // --- Filter actions ---
+    function filterByTag(tagSlug) {
+        if (tagSlug && tagSlug === activeTag) {
+            activeTag = null;
+        } else {
+            activeTag = tagSlug;
+        }
+        updateUrl();
+        visibleCount = PAGE_SIZE;
+
+        document.querySelectorAll('.tag-filter-btn').forEach(btn => {
+            const btnTag = btn.dataset.tag;
+            const isActive = btnTag === (activeTag || '');
+            if (isActive && btnTag) {
+                btn.style.cssText = tagStyle(btnTag);
+                btn.classList.remove('bg-white/5', 'text-gray-500', 'hover:text-gray-300');
+            } else if (isActive && !btnTag) {
+                btn.style.cssText = '';
+                btn.classList.remove('bg-white/5', 'text-gray-500', 'hover:text-gray-300');
+                btn.classList.add('bg-accent/20', 'text-accent');
+            } else {
+                btn.style.cssText = '';
+                btn.classList.remove('bg-accent/20', 'text-accent');
+                btn.classList.add('bg-white/5', 'text-gray-500', 'hover:text-gray-300');
+            }
+        });
+
+        if (dataReady) renderEpisodes();
+    }
+
+    function filterByTier(tier) {
+        if (tier && tier === activeTier) {
+            activeTier = null;
+        } else {
+            activeTier = tier;
+        }
+        updateUrl();
+        visibleCount = PAGE_SIZE;
+
+        document.querySelectorAll('.tier-filter-btn').forEach(btn => {
+            const btnTier = btn.dataset.tier;
+            const isActive = btnTier === (activeTier || '');
+            if (isActive) {
+                btn.classList.remove('border-dark-border', 'hover:border-dark-hover');
+                btn.classList.add('border-accent/40');
+            } else {
+                btn.classList.remove('border-accent/40');
+                btn.classList.add('border-dark-border', 'hover:border-dark-hover');
+            }
+        });
+
+        if (dataReady) renderEpisodes();
+    }
+
+    function loadMore() {
+        visibleCount += PAGE_SIZE;
+        renderEpisodes();
+    }
+
+    // --- Sync Podcasts ---
+    async function syncPodcasts() {
+        const btn = document.getElementById('sync-podcasts-btn');
+        const btnText = document.getElementById('sync-btn-text');
+        const spinner = document.getElementById('sync-spinner');
+
+        btn.disabled = true;
+        btn.classList.add('opacity-50', 'cursor-not-allowed');
+        btnText.textContent = 'Syncing...';
+        spinner.classList.remove('hidden');
+
+        try {
+            const response = await fetch(EPISODES_ROOT + '/api/podcasts/process', { method: 'POST' });
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            btnText.textContent = 'Triggered';
+            setTimeout(() => {
+                btnText.textContent = 'Sync Podcasts';
+            }, 2000);
+            // Refresh episodes after a delay
+            setTimeout(refreshEpisodes, 5000);
+        } catch (err) {
+            btnText.textContent = 'Sync Failed';
+            console.error('Sync failed:', err);
+            setTimeout(() => {
+                btnText.textContent = 'Sync Podcasts';
+            }, 3000);
+        } finally {
+            spinner.classList.add('hidden');
+            btn.disabled = false;
+            btn.classList.remove('opacity-50', 'cursor-not-allowed');
+        }
+    }
+
+    // Called after sync to refresh the dataset
+    async function refreshEpisodes() {
+        try {
+            const response = await fetch(`${EPISODES_ROOT}/api/podcasts/episodes?limit=500`);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            allEpisodes = await response.json();
+            dataReady = true;
+            renderEpisodes();
+        } catch (err) {
+            console.error('Failed to refresh episodes:', err);
+        }
+    }
+
+    // --- Load all episodes on page load ---
+    (async function preloadEpisodes() {
+        try {
+            const response = await fetch(`${EPISODES_ROOT}/api/podcasts/episodes?limit=500`);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            allEpisodes = await response.json();
+            dataReady = true;
+            if (activeTag || activeTier || searchQuery || (activeSort && activeSort !== 'score')) {
+                renderEpisodes();
+            }
+        } catch (err) {
+            console.error('Failed to preload episodes:', err);
+        }
+    })();
+
+    // --- Load more ---
+    const loadMoreBtn = document.getElementById('load-more-btn');
+    if (loadMoreBtn) {
+        loadMoreBtn.addEventListener('click', loadMore);
+    }
+
+    // --- Search (instant client-side) ---
+    const searchInput = document.getElementById('search-input');
+    const searchClear = document.getElementById('search-clear');
+
+    if (searchInput) {
+        searchInput.addEventListener('input', (e) => {
+            const val = e.target.value;
+            searchClear.classList.toggle('hidden', !val);
+            searchQuery = val.trim();
+            visibleCount = PAGE_SIZE;
+            if (dataReady) renderEpisodes();
+        });
+
+        searchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                searchInput.value = '';
+                searchQuery = '';
+                searchClear.classList.add('hidden');
+                visibleCount = PAGE_SIZE;
+                if (dataReady) renderEpisodes();
+            }
+        });
+    }
+
+    if (searchClear) {
+        searchClear.addEventListener('click', () => {
+            searchInput.value = '';
+            searchQuery = '';
+            searchClear.classList.add('hidden');
+            visibleCount = PAGE_SIZE;
+            if (dataReady) renderEpisodes();
+            searchInput.focus();
+        });
+    }
+
+    // Keyboard shortcut: / to focus search
+    document.addEventListener('keydown', (e) => {
+        if (e.key === '/' && document.activeElement !== searchInput && !e.ctrlKey && !e.metaKey) {
+            e.preventDefault();
+            searchInput.focus();
+        }
+    });
+</script>
+{% endblock %}

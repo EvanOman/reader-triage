@@ -15,11 +15,13 @@ class Settings:
     readwise_token: str
     anthropic_api_key: str
     database_url: str
+    groq_api_key: str
 
     def __init__(self):
         self.readwise_token = os.environ.get("READWISE_TOKEN", "")
         self.anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         self.database_url = os.environ.get("DATABASE_URL", "sqlite+aiosqlite:///./reader_triage.db")
+        self.groq_api_key = os.environ.get("GROQ_API_KEY", "")
 
 
 @lru_cache

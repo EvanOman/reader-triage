@@ -9,6 +9,7 @@ from app.models.article import Article, ArticleScore, ArticleTag
 from app.services.tagger import (
     _COLOR_VALUES,
     _FALLBACK,
+    _TAG_CATALOG,
     CURRENT_TAGGING_VERSION,
     TAG_DEFINITIONS,
     TAGS_BY_SLUG,
@@ -321,24 +322,12 @@ class TestBuildTagCatalog:
     """Test the tag catalog builder."""
 
     async def test_catalog_contains_all_slugs(self):
-        with (
-            patch("app.services.tagger.Anthropic"),
-            patch("app.services.tagger.get_readwise_service"),
-        ):
-            tagger = ArticleTagger()
-
         for tag in TAG_DEFINITIONS:
-            assert tag.slug in tagger._tag_catalog
-            assert tag.description in tagger._tag_catalog
+            assert tag.slug in _TAG_CATALOG
+            assert tag.description in _TAG_CATALOG
 
     async def test_catalog_format(self):
-        with (
-            patch("app.services.tagger.Anthropic"),
-            patch("app.services.tagger.get_readwise_service"),
-        ):
-            tagger = ArticleTagger()
-
-        lines = tagger._tag_catalog.split("\n")
+        lines = _TAG_CATALOG.split("\n")
         assert len(lines) == len(TAG_DEFINITIONS)
         for line in lines:
             assert line.startswith("- ")

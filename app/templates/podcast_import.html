@@ -1,0 +1,328 @@
+{% extends "base.html" %}
+
+{% block title %}Import Podcasts - Reader Triage{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto space-y-6">
+    <!-- Back Link -->
+    <a href="{{ request.scope.get('root_path', '') }}/podcasts" class="text-xs text-gray-500 hover:text-gray-300 transition-colors inline-flex items-center gap-1">
+        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+        Podcasts
+    </a>
+
+    <!-- Import Card -->
+    <div class="bg-dark-card rounded-lg p-6 border border-dark-border fade-in">
+        <h1 class="text-lg font-semibold text-white tracking-tight">Import Podcasts</h1>
+        <p class="text-xs text-gray-400 mt-1.5 leading-relaxed">Upload an OPML file from Snipd or other podcast apps to import your subscriptions.</p>
+
+        <form id="import-form" class="mt-4 flex items-center gap-3" enctype="multipart/form-data">
+            <label class="flex-1">
+                <input type="file" id="opml-file" accept=".opml,.xml" class="hidden">
+                <div id="file-label" class="bg-dark-bg border border-dark-border rounded-md px-4 py-2 text-sm text-gray-400 cursor-pointer hover:border-accent/40 transition-colors truncate">
+                    Choose OPML file...
+                </div>
+            </label>
+            <button type="submit" id="import-btn" class="scan-btn bg-accent hover:bg-accent-dim text-white px-4 py-2 rounded-md text-xs font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                <svg id="import-spinner" class="animate-spin h-3 w-3 text-white hidden" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <span id="import-btn-text">Import</span>
+            </button>
+        </form>
+        <div id="import-status" class="mt-3 text-xs hidden"></div>
+    </div>
+
+    <!-- Podcasts List Card -->
+    <div class="bg-dark-card rounded-lg p-6 border border-dark-border fade-in fade-in-delay-1">
+        <div class="flex items-center justify-between mb-4">
+            <h2 class="text-xs font-medium uppercase tracking-widest text-gray-500">
+                Your Podcasts <span class="text-gray-600">({{ podcasts|length }})</span>
+            </h2>
+            {% if podcasts %}
+            <button onclick="processAll()" id="process-all-btn" class="bg-dark-bg hover:bg-dark-hover text-gray-400 hover:text-white px-3 py-1 rounded-md text-xs font-medium border border-dark-border transition-colors flex items-center gap-2">
+                <svg id="process-spinner" class="animate-spin h-3 w-3 hidden" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <span id="process-btn-text">Process All</span>
+            </button>
+            {% endif %}
+        </div>
+
+        {% if podcasts %}
+        <div class="space-y-1" id="podcasts-list">
+            {% for podcast in podcasts %}
+            <div class="flex items-center justify-between px-4 py-3 rounded-lg hover:bg-dark-hover transition-colors group" data-podcast-id="{{ podcast.id }}">
+                <div class="flex-1 min-w-0">
+                    <div class="text-sm font-medium text-gray-200 truncate">{{ podcast.title }}</div>
+                    <div class="text-xs text-gray-500 mt-0.5">
+                        {{ podcast.episode_count }} episode{{ 's' if podcast.episode_count != 1 else '' }}
+                    </div>
+                </div>
+                <div class="flex items-center gap-3 flex-shrink-0">
+                    {% if podcast.youtube_channel_id and podcast.mapping_confirmed %}
+                    <div class="flex items-center gap-1.5">
+                        <span class="text-xs text-gray-400">YouTube: @{{ podcast.youtube_channel_name or podcast.youtube_channel_id }}</span>
+                        <span class="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400">Mapped</span>
+                    </div>
+                    {% elif podcast.youtube_channel_id %}
+                    <div class="flex items-center gap-1.5">
+                        <span class="text-xs text-gray-400">YouTube: @{{ podcast.youtube_channel_name or podcast.youtube_channel_id }}</span>
+                        <button onclick="openMapDialog({{ podcast.id }}, '{{ podcast.title|e }}', '{{ podcast.youtube_channel_id|e }}', '{{ podcast.youtube_channel_name|e }}')"
+                            class="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 transition-colors cursor-pointer">
+                            Confirm
+                        </button>
+                    </div>
+                    {% else %}
+                    <div class="flex items-center gap-1.5">
+                        <span class="text-xs text-gray-500">YouTube: Not mapped</span>
+                        <button onclick="openMapDialog({{ podcast.id }}, '{{ podcast.title|e }}', '', '')"
+                            class="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-white/5 text-gray-400 hover:bg-white/10 transition-colors cursor-pointer">
+                            Map
+                        </button>
+                    </div>
+                    {% endif %}
+                    <button onclick="deletePodcast({{ podcast.id }}, '{{ podcast.title|e }}')"
+                        class="text-gray-600 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100 p-1" title="Delete podcast">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                    </button>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="text-center py-8">
+            <p class="text-gray-500 text-sm">No podcasts imported yet. Upload an OPML file to get started.</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- YouTube Mapping Dialog -->
+<div id="map-dialog" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 hidden flex items-center justify-center">
+    <div class="bg-dark-card border border-dark-border rounded-lg p-6 w-full max-w-md mx-4">
+        <h3 class="text-sm font-semibold text-white mb-1">Map YouTube Channel</h3>
+        <p id="map-podcast-name" class="text-xs text-gray-400 mb-4"></p>
+
+        <input type="hidden" id="map-podcast-id">
+        <div class="space-y-3">
+            <div>
+                <label class="text-xs text-gray-500 block mb-1">YouTube Channel ID</label>
+                <input type="text" id="map-channel-id" placeholder="e.g. UCxxxxxx or @handle"
+                    class="w-full bg-dark-bg border border-dark-border rounded-md px-3 py-2 text-sm text-gray-300 placeholder-gray-600 focus:outline-none focus:border-accent/40 transition-colors">
+            </div>
+            <div>
+                <label class="text-xs text-gray-500 block mb-1">Channel Name (optional)</label>
+                <input type="text" id="map-channel-name" placeholder="e.g. Lex Fridman"
+                    class="w-full bg-dark-bg border border-dark-border rounded-md px-3 py-2 text-sm text-gray-300 placeholder-gray-600 focus:outline-none focus:border-accent/40 transition-colors">
+            </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-2 mt-5">
+            <button onclick="closeMapDialog()" class="text-xs text-gray-400 hover:text-white px-3 py-1.5 rounded-md hover:bg-white/5 transition-colors">Cancel</button>
+            <button onclick="saveMapping()" id="save-map-btn" class="bg-accent hover:bg-accent-dim text-white px-4 py-1.5 rounded-md text-xs font-medium transition-colors">Save</button>
+        </div>
+        <div id="map-status" class="mt-3 text-xs hidden"></div>
+    </div>
+</div>
+
+<script>
+    const IMPORT_ROOT = '{{ request.scope.get("root_path", "") }}';
+
+    // --- File Upload ---
+    const fileInput = document.getElementById('opml-file');
+    const fileLabel = document.getElementById('file-label');
+    const importBtn = document.getElementById('import-btn');
+
+    fileInput.addEventListener('change', () => {
+        if (fileInput.files.length > 0) {
+            fileLabel.textContent = fileInput.files[0].name;
+            fileLabel.classList.add('text-gray-200', 'border-accent/40');
+            importBtn.disabled = false;
+        } else {
+            fileLabel.textContent = 'Choose OPML file...';
+            fileLabel.classList.remove('text-gray-200', 'border-accent/40');
+            importBtn.disabled = true;
+        }
+    });
+
+    document.getElementById('import-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (!fileInput.files.length) return;
+
+        const btn = document.getElementById('import-btn');
+        const btnText = document.getElementById('import-btn-text');
+        const spinner = document.getElementById('import-spinner');
+        const statusEl = document.getElementById('import-status');
+
+        btn.disabled = true;
+        btn.classList.add('opacity-50', 'cursor-not-allowed');
+        btnText.textContent = 'Importing...';
+        spinner.classList.remove('hidden');
+
+        const formData = new FormData();
+        formData.append('file', fileInput.files[0]);
+
+        try {
+            const response = await fetch(IMPORT_ROOT + '/api/podcasts/import', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                throw new Error(err.detail || `HTTP ${response.status}`);
+            }
+
+            const data = await response.json();
+            statusEl.textContent = data.message || 'Import successful!';
+            statusEl.classList.remove('hidden', 'text-red-400');
+            statusEl.classList.add('text-emerald-400');
+            btnText.textContent = 'Imported';
+
+            setTimeout(() => {
+                window.location.reload();
+            }, 1500);
+        } catch (err) {
+            statusEl.textContent = 'Import failed: ' + err.message;
+            statusEl.classList.remove('hidden', 'text-emerald-400');
+            statusEl.classList.add('text-red-400');
+            btnText.textContent = 'Import';
+            btn.disabled = false;
+            btn.classList.remove('opacity-50', 'cursor-not-allowed');
+        } finally {
+            spinner.classList.add('hidden');
+        }
+    });
+
+    // --- Process All ---
+    async function processAll() {
+        const btn = document.getElementById('process-all-btn');
+        const btnText = document.getElementById('process-btn-text');
+        const spinner = document.getElementById('process-spinner');
+
+        btn.disabled = true;
+        btn.classList.add('opacity-50', 'cursor-not-allowed');
+        btnText.textContent = 'Processing...';
+        spinner.classList.remove('hidden');
+
+        try {
+            const response = await fetch(IMPORT_ROOT + '/api/podcasts/process', { method: 'POST' });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            btnText.textContent = 'Triggered';
+            setTimeout(() => {
+                btnText.textContent = 'Process All';
+                btn.disabled = false;
+                btn.classList.remove('opacity-50', 'cursor-not-allowed');
+            }, 3000);
+        } catch (err) {
+            btnText.textContent = 'Failed';
+            console.error('Process failed:', err);
+            setTimeout(() => {
+                btnText.textContent = 'Process All';
+                btn.disabled = false;
+                btn.classList.remove('opacity-50', 'cursor-not-allowed');
+            }, 3000);
+        } finally {
+            spinner.classList.add('hidden');
+        }
+    }
+
+    // --- YouTube Mapping Dialog ---
+    function openMapDialog(podcastId, podcastName, channelId, channelName) {
+        document.getElementById('map-podcast-id').value = podcastId;
+        document.getElementById('map-podcast-name').textContent = podcastName;
+        document.getElementById('map-channel-id').value = channelId || '';
+        document.getElementById('map-channel-name').value = channelName || '';
+        document.getElementById('map-status').classList.add('hidden');
+        document.getElementById('map-dialog').classList.remove('hidden');
+    }
+
+    function closeMapDialog() {
+        document.getElementById('map-dialog').classList.add('hidden');
+    }
+
+    // Close dialog on backdrop click
+    document.getElementById('map-dialog').addEventListener('click', (e) => {
+        if (e.target === e.currentTarget) closeMapDialog();
+    });
+
+    // Close dialog on Escape
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeMapDialog();
+    });
+
+    async function saveMapping() {
+        const podcastId = document.getElementById('map-podcast-id').value;
+        const channelId = document.getElementById('map-channel-id').value.trim();
+        const channelName = document.getElementById('map-channel-name').value.trim();
+        const statusEl = document.getElementById('map-status');
+
+        if (!channelId) {
+            statusEl.textContent = 'Channel ID is required.';
+            statusEl.classList.remove('hidden', 'text-emerald-400');
+            statusEl.classList.add('text-red-400');
+            return;
+        }
+
+        const btn = document.getElementById('save-map-btn');
+        btn.disabled = true;
+        btn.classList.add('opacity-50');
+
+        try {
+            const response = await fetch(IMPORT_ROOT + '/api/podcasts/' + podcastId + '/youtube-mapping', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    youtube_channel_id: channelId,
+                    youtube_channel_name: channelName || null,
+                    mapping_confirmed: true
+                })
+            });
+
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                throw new Error(err.detail || `HTTP ${response.status}`);
+            }
+
+            statusEl.textContent = 'Mapping saved!';
+            statusEl.classList.remove('hidden', 'text-red-400');
+            statusEl.classList.add('text-emerald-400');
+
+            setTimeout(() => {
+                closeMapDialog();
+                window.location.reload();
+            }, 1000);
+        } catch (err) {
+            statusEl.textContent = 'Failed: ' + err.message;
+            statusEl.classList.remove('hidden', 'text-emerald-400');
+            statusEl.classList.add('text-red-400');
+        } finally {
+            btn.disabled = false;
+            btn.classList.remove('opacity-50');
+        }
+    }
+
+    // --- Delete Podcast ---
+    async function deletePodcast(podcastId, podcastName) {
+        if (!confirm('Delete "' + podcastName + '" and all its episodes? This cannot be undone.')) return;
+
+        try {
+            const response = await fetch(IMPORT_ROOT + '/api/podcasts/' + podcastId, { method: 'DELETE' });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+            // Remove from DOM
+            const row = document.querySelector(`[data-podcast-id="${podcastId}"]`);
+            if (row) {
+                row.style.transition = 'opacity 0.2s ease';
+                row.style.opacity = '0';
+                setTimeout(() => row.remove(), 200);
+            }
+        } catch (err) {
+            console.error('Delete failed:', err);
+            alert('Failed to delete podcast: ' + err.message);
+        }
+    }
+</script>
+{% endblock %}
