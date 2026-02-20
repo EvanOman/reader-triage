@@ -1,8 +1,11 @@
 """Podcast episode scoring service using Claude."""
 
+from __future__ import annotations
+
 import json
 import logging
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from anthropic import Anthropic
 from sqlalchemy import select
@@ -11,7 +14,10 @@ from sqlalchemy.orm import selectinload
 from app.config import get_settings
 from app.models.article import get_session_factory
 from app.models.podcast import PodcastEpisode, PodcastEpisodeScore
-from app.services.scorer import CURRENT_SCORING_VERSION, InfoScore, score_content
+from app.services.scorer import InfoScore
+
+if TYPE_CHECKING:
+    from app.services.scoring_strategy import ScoringStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -19,9 +25,15 @@ logger = logging.getLogger(__name__)
 class PodcastScorer:
     """Scores podcast episodes by capture value using Claude."""
 
-    def __init__(self):
+    def __init__(self, strategy: ScoringStrategy | None = None):
         settings = get_settings()
         self._anthropic = Anthropic(api_key=settings.anthropic_api_key)
+        if strategy is not None:
+            self._strategy = strategy
+        else:
+            from app.services.scorer import _get_default_strategy
+
+            self._strategy = _get_default_strategy()
 
     async def score_episode(self, episode: PodcastEpisode) -> PodcastEpisodeScore | None:
         """Score a single episode that has a transcript.
@@ -42,7 +54,7 @@ class PodcastScorer:
         # Estimate word count from transcript
         word_count = len(episode.transcript.split())
 
-        result: InfoScore | None = await score_content(
+        result: InfoScore | None = await self._strategy.score(
             title=episode.title,
             author=show_name,
             content=episode.transcript,
@@ -71,7 +83,7 @@ class PodcastScorer:
             ),
             overall_assessment=result.overall_assessment,
             model_used="claude-sonnet-4-20250514",
-            scoring_version=CURRENT_SCORING_VERSION,
+            scoring_version=self._strategy.version,
             scored_at=datetime.now(),
         )
 
@@ -88,7 +100,7 @@ class PodcastScorer:
         podcast_title = ep_info.get("podcast_title")
         author = str(podcast_title) if podcast_title else None
 
-        result: InfoScore | None = await score_content(
+        result: InfoScore | None = await self._strategy.score(
             title=title,
             author=author,
             content=transcript,
@@ -117,7 +129,7 @@ class PodcastScorer:
             ),
             overall_assessment=result.overall_assessment,
             model_used="claude-sonnet-4-20250514",
-            scoring_version=CURRENT_SCORING_VERSION,
+            scoring_version=self._strategy.version,
             scored_at=datetime.now(),
         )
 
@@ -182,9 +194,17 @@ class PodcastScorer:
 _podcast_scorer: PodcastScorer | None = None
 
 
-def get_podcast_scorer() -> PodcastScorer:
-    """Get or create the podcast scorer singleton."""
+def get_podcast_scorer(strategy: ScoringStrategy | None = None) -> PodcastScorer:
+    """Get or create the podcast scorer singleton.
+
+    Args:
+        strategy: Optional scoring strategy override. When provided, a new
+            PodcastScorer is created (bypassing the singleton). When None,
+            returns the cached singleton with the default strategy.
+    """
     global _podcast_scorer
+    if strategy is not None:
+        return PodcastScorer(strategy=strategy)
     if _podcast_scorer is None:
         _podcast_scorer = PodcastScorer()
     return _podcast_scorer

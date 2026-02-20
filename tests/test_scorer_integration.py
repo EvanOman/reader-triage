@@ -12,7 +12,7 @@ import pytest
 from readwise_sdk.exceptions import RateLimitError
 from sqlalchemy import select
 
-from app.models.article import Article, ArticleScore, Author
+from app.models.article import Article, ArticleScore, Author, BinaryArticleScore
 from app.services.scorer import CURRENT_SCORING_VERSION, ArticleScorer
 from tests.factories import make_claude_response, make_document, mock_anthropic_response
 
@@ -47,6 +47,21 @@ def scorer(fake_readwise, mock_claude):
     return s
 
 
+def _make_v3_response(overrides: dict | None = None) -> dict:
+    """Build a v3-binary Claude response with all 20 questions."""
+    base: dict[str, object] = {}
+    for i in range(1, 21):
+        base[f"q{i}"] = True
+        base[f"q{i}_reason"] = f"Reason for q{i}"
+    for q in ["q8", "q12", "q16", "q20"]:
+        base[q] = False
+        base[f"{q}_reason"] = "Not a penalty case"
+    base["overall_assessment"] = "Strong article."
+    if overrides:
+        base.update(overrides)
+    return base
+
+
 @pytest.fixture
 def deps(session_factory):
     """Patch scorer's DB, FTS, usage, and sleep dependencies."""
@@ -59,7 +74,7 @@ def deps(session_factory):
             new=AsyncMock(return_value=session_factory),
         ),
         patch("app.services.scorer.upsert_fts_entry", new=mock_fts),
-        patch("app.services.scorer.log_usage", new=mock_log),
+        patch("app.services.scoring_strategy.log_usage", new=mock_log),
         patch("asyncio.sleep", new=mock_sleep),
     ):
         yield {
@@ -156,7 +171,7 @@ class TestProcessDocuments:
     async def test_already_scored_with_current_version_skipped(self, scorer, fake_readwise, deps):
         sf = deps["session_factory"]
 
-        # Pre-insert with current version score
+        # Pre-insert with current version v2 score AND v3 score
         async with sf() as session:
             article = Article(
                 id="skip-1",
@@ -175,15 +190,25 @@ class TestProcessDocuments:
                 actionability_score=20,
                 scoring_version=CURRENT_SCORING_VERSION,
             )
+            v3_score = BinaryArticleScore(
+                article_id="skip-1",
+                info_score=75,
+                specificity_score=20,
+                novelty_score=18,
+                depth_score=20,
+                actionability_score=17,
+                scoring_version="v3-binary",
+            )
             session.add(article)
             session.add(score)
+            session.add(v3_score)
             await session.commit()
 
         doc = make_document(id="skip-1")
         meta_doc = replace(doc, content=None)
         result = await scorer._process_documents([meta_doc])
 
-        # get_document should NOT be called (no scoring needed)
+        # get_document should NOT be called (no scoring needed for either v2 or v3)
         assert "skip-1" not in fake_readwise.get_document_calls
         assert result.newly_scored == 0
 
@@ -699,3 +724,132 @@ class TestRecomputePriorities:
         count = await scorer.recompute_priorities()
 
         assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# Dual scoring (v2 + v3) tests
+# ---------------------------------------------------------------------------
+
+
+class TestDualScoring:
+    """Tests for v2 + v3 scoring running in parallel."""
+
+    async def test_new_article_gets_both_v2_and_v3_scores(
+        self, scorer, fake_readwise, deps, mock_claude
+    ):
+        """A new article should get both a v2 and v3 score."""
+        # Configure mock to return v3 responses on the second call
+        v3_data = _make_v3_response()
+        v2_resp = mock_anthropic_response(make_claude_response())
+        v3_resp = mock_anthropic_response(v3_data)
+        mock_claude.messages.create.side_effect = [v2_resp, v3_resp]
+
+        doc = make_document(id="dual-1", title="Dual Score Article")
+        fake_readwise.add_document(doc)
+        meta_doc = replace(doc, content=None)
+
+        await scorer._process_documents([meta_doc])
+
+        async with deps["session_factory"]() as session:
+            v2_score = (
+                await session.execute(
+                    select(ArticleScore).where(ArticleScore.article_id == "dual-1")
+                )
+            ).scalar_one()
+            assert v2_score.info_score == _DEFAULT_TOTAL
+            assert v2_score.scoring_version == CURRENT_SCORING_VERSION
+
+            v3_score = (
+                await session.execute(
+                    select(BinaryArticleScore).where(BinaryArticleScore.article_id == "dual-1")
+                )
+            ).scalar_one()
+            assert v3_score.info_score == 100  # All positive yes, all penalties no
+            assert v3_score.scoring_version == "v3-binary"
+            assert v3_score.raw_responses is not None
+
+    async def test_v3_failure_does_not_block_v2(self, scorer, fake_readwise, deps, mock_claude):
+        """If v3 scoring fails, v2 should still succeed."""
+        v2_resp = mock_anthropic_response(make_claude_response())
+        # v3 call raises an exception
+        mock_claude.messages.create.side_effect = [v2_resp, Exception("v3 API fail")]
+
+        doc = make_document(id="v3fail-1")
+        fake_readwise.add_document(doc)
+        meta_doc = replace(doc, content=None)
+
+        result = await scorer._process_documents([meta_doc])
+
+        assert result.newly_scored == 1  # v2 succeeded
+
+        async with deps["session_factory"]() as session:
+            v2 = (
+                await session.execute(
+                    select(ArticleScore).where(ArticleScore.article_id == "v3fail-1")
+                )
+            ).scalar_one()
+            assert v2.info_score == _DEFAULT_TOTAL
+
+            v3 = (
+                await session.execute(
+                    select(BinaryArticleScore).where(BinaryArticleScore.article_id == "v3fail-1")
+                )
+            ).scalar_one_or_none()
+            assert v3 is None  # v3 failed, no record
+
+    async def test_already_v2_scored_article_still_gets_v3(
+        self, scorer, fake_readwise, deps, mock_claude
+    ):
+        """An article with a current v2 score but no v3 should get v3 scored."""
+        sf = deps["session_factory"]
+
+        # Pre-insert article with current v2 score
+        async with sf() as session:
+            article = Article(
+                id="v2only-1",
+                title="V2 Only Article",
+                url="https://example.com/v2only",
+                author="Author",
+                location="new",
+                category="article",
+            )
+            score = ArticleScore(
+                article_id="v2only-1",
+                info_score=80,
+                specificity_score=20,
+                novelty_score=20,
+                depth_score=20,
+                actionability_score=20,
+                scoring_version=CURRENT_SCORING_VERSION,
+            )
+            session.add(article)
+            session.add(score)
+            await session.commit()
+
+        # Configure mock for v3 only (v2 is skipped)
+        v3_data = _make_v3_response()
+        mock_claude.messages.create.return_value = mock_anthropic_response(v3_data)
+
+        doc = make_document(id="v2only-1")
+        fake_readwise.add_document(doc)
+        meta_doc = replace(doc, content=None)
+
+        await scorer._process_documents([meta_doc])
+
+        async with sf() as session:
+            # v2 should be unchanged
+            v2 = (
+                await session.execute(
+                    select(ArticleScore).where(ArticleScore.article_id == "v2only-1")
+                )
+            ).scalar_one()
+            assert v2.info_score == 80  # Unchanged
+
+            # v3 should now exist
+            v3 = (
+                await session.execute(
+                    select(BinaryArticleScore).where(BinaryArticleScore.article_id == "v2only-1")
+                )
+            ).scalar_one()
+            assert v3.info_score == 100
+            assert v3.scoring_version == "v3-binary"

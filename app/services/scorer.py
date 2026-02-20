@@ -1,22 +1,37 @@
 """Information content scoring service using Claude."""
 
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from anthropic import Anthropic
-from anthropic.types import TextBlock
 from readwise_sdk.exceptions import RateLimitError
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.models.article import Article, ArticleScore, Author, get_session_factory, upsert_fts_entry
+from app.models.article import (
+    Article,
+    ArticleScore,
+    Author,
+    BinaryArticleScore,
+    get_session_factory,
+    upsert_fts_entry,
+)
 from app.services.readwise import ReaderDocument, get_readwise_service
-from app.services.usage import log_usage
+
+if TYPE_CHECKING:
+    from app.services.scoring_strategy import (
+        BinaryScoringStrategy,
+        CategoricalScoringStrategy,
+        ScoringStrategy,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -163,10 +178,18 @@ class InfoScore:
     actionability_reason: str
     overall_assessment: str
     content_fetch_failed: bool = False
+    raw_responses: dict[str, object] | None = None
+    total_override: int | None = None
 
     @property
     def total(self) -> int:
-        """Total score (0-100)."""
+        """Total score (0-100).
+
+        Uses total_override when set (e.g. v3-binary scores include
+        cross-cutting questions not captured in dimension sub-scores).
+        """
+        if self.total_override is not None:
+            return self.total_override
         return self.specificity + self.novelty + self.depth + self.actionability
 
 
@@ -206,6 +229,31 @@ def _assessment_indicates_bad_content(assessment: str) -> bool:
     return any(p in text for p in _BAD_ASSESSMENT_PATTERNS)
 
 
+# Default strategy instances (lazy-initialized)
+_default_strategy: CategoricalScoringStrategy | None = None
+_default_v3_strategy: BinaryScoringStrategy | None = None
+
+
+def _get_default_strategy() -> CategoricalScoringStrategy:
+    """Get or create the default CategoricalScoringStrategy instance."""
+    global _default_strategy
+    if _default_strategy is None:
+        from app.services.scoring_strategy import CategoricalScoringStrategy
+
+        _default_strategy = CategoricalScoringStrategy()
+    return _default_strategy
+
+
+def _get_default_v3_strategy() -> BinaryScoringStrategy:
+    """Get or create the default BinaryScoringStrategy instance."""
+    global _default_v3_strategy
+    if _default_v3_strategy is None:
+        from app.services.scoring_strategy import BinaryScoringStrategy
+
+        _default_v3_strategy = BinaryScoringStrategy()
+    return _default_v3_strategy
+
+
 async def score_content(
     *,
     title: str,
@@ -219,9 +267,10 @@ async def score_content(
 ) -> InfoScore | None:
     """Score content for capture value using Claude.
 
-    Shared scoring logic used by both ArticleScorer and PodcastScorer.
-    Does NOT handle stub detection — callers must handle that article-specific
-    concern before calling this function.
+    Backward-compatible entry point that delegates to the default
+    CategoricalScoringStrategy. Both ArticleScorer and PodcastScorer
+    now use strategy injection directly, but this function remains
+    for any external callers.
 
     Args:
         title: Title of the content.
@@ -237,87 +286,17 @@ async def score_content(
     Returns:
         InfoScore or None if scoring failed.
     """
-    if not content:
-        return None
-
-    # Select prompt template and score mappings based on content type
-    if content_type_hint == "podcast":
-        scoring_prompt = _PODCAST_SCORING_PROMPT
-        content_type_scores = PODCAST_CONTENT_TYPE_SCORES
-        completeness_scores = PODCAST_COMPLETENESS_SCORES
-    else:
-        scoring_prompt = _ARTICLE_SCORING_PROMPT
-        content_type_scores = CONTENT_TYPE_SCORES
-        completeness_scores = COMPLETENESS_SCORES
-
-    # Truncate content if too long
-    max_content_length = _MAX_CONTENT_LENGTH.get(content_type_hint, 15000)
-    if len(content) > max_content_length:
-        content = content[:max_content_length] + "... [truncated]"
-
-    prompt = scoring_prompt.format(
+    strategy = _get_default_strategy()
+    return await strategy.score(
         title=title,
-        author=author or "Unknown",
-        word_count=word_count or "Unknown",
+        author=author,
         content=content,
+        word_count=word_count,
+        content_type_hint=content_type_hint,
+        anthropic_client=anthropic_client,
+        entity_id=entity_id,
         content_warning=content_warning,
     )
-
-    try:
-        model = "claude-sonnet-4-20250514"
-        response = anthropic_client.messages.create(
-            model=model,
-            max_tokens=700,
-            messages=[{"role": "user", "content": prompt}],
-        )
-
-        # Log usage
-        service = "podcast_scorer" if content_type_hint == "podcast" else "scorer"
-        await log_usage(
-            service=service,
-            model=model,
-            input_tokens=response.usage.input_tokens,
-            output_tokens=response.usage.output_tokens,
-            article_id=entity_id,
-        )
-
-        first_block = response.content[0]
-        assert isinstance(first_block, TextBlock)
-        text = first_block.text.strip()
-        if text.startswith("```"):
-            text = re.sub(r"```(?:json)?\n?", "", text)
-            text = text.strip()
-
-        data = json.loads(text)
-
-        # Map categorical responses to numeric scores
-        quotability = STANDALONE_SCORES.get(data.get("standalone_passages", "none"), 0)
-        surprise = (NOVEL_FRAMING_POINTS if data.get("novel_framing") else 0) + (
-            content_type_scores.get(data.get("content_type", ""), 0)
-        )
-        argument = (
-            (AUTHOR_CONVICTION_POINTS if data.get("author_conviction") else 0)
-            + (PRACTITIONER_VOICE_POINTS if data.get("practitioner_voice") else 0)
-            + completeness_scores.get(data.get("content_completeness", ""), 0)
-        )
-        insight = (NAMED_FRAMEWORK_POINTS if data.get("named_framework") else 0) + (
-            APPLICABLE_SCORES.get(data.get("applicable_ideas", ""), 0)
-        )
-
-        return InfoScore(
-            specificity=min(25, max(0, quotability)),
-            specificity_reason=data.get("quotability_reason", ""),
-            novelty=min(25, max(0, surprise)),
-            novelty_reason=data.get("surprise_reason", ""),
-            depth=min(25, max(0, argument)),
-            depth_reason=data.get("argument_reason", ""),
-            actionability=min(25, max(0, insight)),
-            actionability_reason=data.get("insight_reason", ""),
-            overall_assessment=data.get("overall_assessment", ""),
-        )
-    except Exception as e:
-        logger.error("Error scoring content %s: %s", entity_id, e)
-        return None
 
 
 class ArticleScorer:
@@ -335,10 +314,22 @@ class ArticleScorer:
         (2, 3),  # 2+ highlights: +3 priority
     ]
 
-    def __init__(self):
+    def __init__(
+        self,
+        strategy: ScoringStrategy | None = None,
+        v3_strategy: ScoringStrategy | None = None,
+    ):
         settings = get_settings()
         self._anthropic = Anthropic(api_key=settings.anthropic_api_key)
         self._readwise = get_readwise_service()
+        if strategy is not None:
+            self._strategy = strategy
+        else:
+            self._strategy = _get_default_strategy()
+        if v3_strategy is not None:
+            self._v3_strategy = v3_strategy
+        else:
+            self._v3_strategy = _get_default_v3_strategy()
 
     async def scan_all_documents(self, limit: int = 100) -> ScanResult:
         """Scan all non-archived documents and score unscored ones.
@@ -403,26 +394,37 @@ class ArticleScorer:
                     article.readwise_updated_at = doc.updated_at
                     article.last_synced_at = datetime.now()
 
-                # Check if already scored with current version
+                # Check if v2 scoring needed
                 score_result = await session.execute(
                     select(ArticleScore).where(ArticleScore.article_id == doc.id)
                 )
                 existing_score = score_result.scalar_one_or_none()
 
-                needs_scoring = existing_score is None
-                if (
-                    existing_score is not None
-                    and existing_score.scoring_version != CURRENT_SCORING_VERSION
-                ):
-                    needs_scoring = True
+                needs_v2 = existing_score is None or (
+                    existing_score.scoring_version != self._strategy.version
+                )
 
-                if needs_scoring:
-                    # Fetch full content individually (batch API often returns
-                    # only summaries; single-fetch is reliable)
-                    full_doc = await self._readwise.get_document(doc.id, with_content=True)
-                    if full_doc is None:
+                # Check if v3 scoring needed
+                v3_result = await session.execute(
+                    select(BinaryArticleScore).where(BinaryArticleScore.article_id == doc.id)
+                )
+                existing_v3 = v3_result.scalar_one_or_none()
+                needs_v3 = existing_v3 is None or (
+                    existing_v3.scoring_version != self._v3_strategy.version
+                )
+
+                # Commit article metadata changes now, before the slow Claude API
+                # scoring calls, to release the SQLite write lock promptly.
+                await session.commit()
+
+                # Fetch full content if either scorer needs it
+                full_doc = doc
+                if needs_v2 or needs_v3:
+                    fetched = await self._readwise.get_document(doc.id, with_content=True)
+                    if fetched is None:
                         logger.warning("Could not fetch full content for %s", doc.id)
-                        full_doc = doc  # fall back to whatever we have
+                    else:
+                        full_doc = fetched
 
                     # Store clean content on article for FTS
                     if full_doc.content:
@@ -431,82 +433,133 @@ class ArticleScorer:
                         if not article.content_preview:
                             article.content_preview = clean_text[:2000]
 
-                    # Score the article
+                # --- v2 scoring ---
+                if needs_v2:
                     score = await self._score_document(full_doc)
-                    if score is None:
-                        continue
+                    if score is not None:
+                        author_boost = await self._get_author_boost(session, doc.author)
+                        priority_score = score.total + author_boost
+                        skip_recommended = score.total < 30
+                        skip_reason = "Low information content" if skip_recommended else None
 
-                    # Get author boost
-                    author_boost = await self._get_author_boost(session, doc.author)
-
-                    # Calculate priority score
-                    priority_score = score.total + author_boost
-
-                    # Determine if skip recommended
-                    skip_recommended = score.total < 30
-                    skip_reason = "Low information content" if skip_recommended else None
-
-                    if existing_score is not None:
-                        # Update existing score (re-scoring due to version change)
-                        existing_score.info_score = score.total
-                        existing_score.specificity_score = score.specificity
-                        existing_score.novelty_score = score.novelty
-                        existing_score.depth_score = score.depth
-                        existing_score.actionability_score = score.actionability
-                        existing_score.score_reasons = json.dumps(
-                            [
-                                score.specificity_reason,
-                                score.novelty_reason,
-                                score.depth_reason,
-                                score.actionability_reason,
-                            ]
-                        )
-                        existing_score.overall_assessment = score.overall_assessment
-                        existing_score.priority_score = priority_score
-                        existing_score.author_boost = author_boost
-                        existing_score.priority_signals = json.dumps(
-                            {"author_highlights": author_boost > 0}
-                        )
-                        existing_score.content_fetch_failed = score.content_fetch_failed
-                        existing_score.skip_recommended = skip_recommended
-                        existing_score.skip_reason = skip_reason
-                        existing_score.model_used = "claude-sonnet-4-20250514"
-                        existing_score.scoring_version = CURRENT_SCORING_VERSION
-                        existing_score.scored_at = datetime.now()
-                        existing_score.priority_computed_at = datetime.now()
-                    else:
-                        # Save new score
-                        article_score = ArticleScore(
-                            article_id=doc.id,
-                            info_score=score.total,
-                            specificity_score=score.specificity,
-                            novelty_score=score.novelty,
-                            depth_score=score.depth,
-                            actionability_score=score.actionability,
-                            score_reasons=json.dumps(
+                        if existing_score is not None:
+                            existing_score.info_score = score.total
+                            existing_score.specificity_score = score.specificity
+                            existing_score.novelty_score = score.novelty
+                            existing_score.depth_score = score.depth
+                            existing_score.actionability_score = score.actionability
+                            existing_score.score_reasons = json.dumps(
                                 [
                                     score.specificity_reason,
                                     score.novelty_reason,
                                     score.depth_reason,
                                     score.actionability_reason,
                                 ]
-                            ),
-                            overall_assessment=score.overall_assessment,
-                            priority_score=priority_score,
-                            author_boost=author_boost,
-                            priority_signals=json.dumps({"author_highlights": author_boost > 0}),
-                            content_fetch_failed=score.content_fetch_failed,
-                            skip_recommended=skip_recommended,
-                            skip_reason=skip_reason,
-                            model_used="claude-sonnet-4-20250514",
-                            scoring_version=CURRENT_SCORING_VERSION,
-                            scored_at=datetime.now(),
-                            priority_computed_at=datetime.now(),
-                        )
-                        session.add(article_score)
-                    newly_scored += 1
+                            )
+                            existing_score.overall_assessment = score.overall_assessment
+                            existing_score.priority_score = priority_score
+                            existing_score.author_boost = author_boost
+                            existing_score.priority_signals = json.dumps(
+                                {"author_highlights": author_boost > 0}
+                            )
+                            existing_score.content_fetch_failed = score.content_fetch_failed
+                            existing_score.skip_recommended = skip_recommended
+                            existing_score.skip_reason = skip_reason
+                            existing_score.model_used = "claude-sonnet-4-20250514"
+                            existing_score.scoring_version = self._strategy.version
+                            existing_score.scored_at = datetime.now()
+                            existing_score.priority_computed_at = datetime.now()
+                        else:
+                            article_score = ArticleScore(
+                                article_id=doc.id,
+                                info_score=score.total,
+                                specificity_score=score.specificity,
+                                novelty_score=score.novelty,
+                                depth_score=score.depth,
+                                actionability_score=score.actionability,
+                                score_reasons=json.dumps(
+                                    [
+                                        score.specificity_reason,
+                                        score.novelty_reason,
+                                        score.depth_reason,
+                                        score.actionability_reason,
+                                    ]
+                                ),
+                                overall_assessment=score.overall_assessment,
+                                priority_score=priority_score,
+                                author_boost=author_boost,
+                                priority_signals=json.dumps(
+                                    {"author_highlights": author_boost > 0}
+                                ),
+                                content_fetch_failed=score.content_fetch_failed,
+                                skip_recommended=skip_recommended,
+                                skip_reason=skip_reason,
+                                model_used="claude-sonnet-4-20250514",
+                                scoring_version=self._strategy.version,
+                                scored_at=datetime.now(),
+                                priority_computed_at=datetime.now(),
+                            )
+                            session.add(article_score)
+                        newly_scored += 1
 
-            await session.commit()
+                # --- v3 scoring (independent of v2) ---
+                if needs_v3:
+                    v3_score = await self._score_document_v3(full_doc)
+                    if v3_score is not None:
+                        if existing_v3 is not None:
+                            existing_v3.info_score = v3_score.total
+                            existing_v3.specificity_score = v3_score.specificity
+                            existing_v3.novelty_score = v3_score.novelty
+                            existing_v3.depth_score = v3_score.depth
+                            existing_v3.actionability_score = v3_score.actionability
+                            existing_v3.raw_responses = (
+                                json.dumps(v3_score.raw_responses)
+                                if v3_score.raw_responses
+                                else None
+                            )
+                            existing_v3.score_reasons = json.dumps(
+                                [
+                                    v3_score.specificity_reason,
+                                    v3_score.novelty_reason,
+                                    v3_score.depth_reason,
+                                    v3_score.actionability_reason,
+                                ]
+                            )
+                            existing_v3.overall_assessment = v3_score.overall_assessment
+                            existing_v3.content_fetch_failed = v3_score.content_fetch_failed
+                            existing_v3.model_used = "claude-sonnet-4-20250514"
+                            existing_v3.scoring_version = self._v3_strategy.version
+                            existing_v3.scored_at = datetime.now()
+                        else:
+                            v3_record = BinaryArticleScore(
+                                article_id=doc.id,
+                                info_score=v3_score.total,
+                                specificity_score=v3_score.specificity,
+                                novelty_score=v3_score.novelty,
+                                depth_score=v3_score.depth,
+                                actionability_score=v3_score.actionability,
+                                raw_responses=json.dumps(v3_score.raw_responses)
+                                if v3_score.raw_responses
+                                else None,
+                                score_reasons=json.dumps(
+                                    [
+                                        v3_score.specificity_reason,
+                                        v3_score.novelty_reason,
+                                        v3_score.depth_reason,
+                                        v3_score.actionability_reason,
+                                    ]
+                                ),
+                                overall_assessment=v3_score.overall_assessment,
+                                content_fetch_failed=v3_score.content_fetch_failed,
+                                model_used="claude-sonnet-4-20250514",
+                                scoring_version=self._v3_strategy.version,
+                                scored_at=datetime.now(),
+                            )
+                            session.add(v3_record)
+
+                # Commit after each document to release the SQLite write lock promptly,
+                # preventing "database is locked" errors in concurrent tasks.
+                await session.commit()
 
             # Update FTS index for new articles
             for art in new_articles:
@@ -730,7 +783,7 @@ class ArticleScorer:
                     existing.skip_recommended = skip_recommended
                     existing.skip_reason = "Low information content" if skip_recommended else None
                     existing.model_used = "claude-sonnet-4-20250514"
-                    existing.scoring_version = CURRENT_SCORING_VERSION
+                    existing.scoring_version = self._strategy.version
                     existing.scored_at = datetime.now()
                     existing.priority_computed_at = datetime.now()
                     await session.commit()
@@ -834,7 +887,7 @@ class ArticleScorer:
                 "available, but note this limitation in your assessment.\n\n"
             )
 
-        result = await score_content(
+        result = await self._strategy.score(
             title=doc.title,
             author=doc.author,
             content=content,
@@ -857,14 +910,79 @@ class ArticleScorer:
 
         return result
 
+    async def _score_document_v3(self, doc: ReaderDocument) -> InfoScore | None:
+        """Score a document using the v3-binary strategy.
+
+        Handles the same stub detection as _score_document but delegates
+        to the v3 strategy for scoring.
+        """
+        content = doc.content or doc.summary or ""
+        if not content:
+            return None
+
+        is_stub = self._content_is_stub(doc)
+        if is_stub and not doc.content:
+            logger.info(
+                "Skipping v3 for %s: only summary available (%s words reported)",
+                doc.id,
+                doc.word_count,
+            )
+            return InfoScore(
+                specificity=0,
+                specificity_reason="Content not available",
+                novelty=0,
+                novelty_reason="Content not available",
+                depth=0,
+                depth_reason="Content not available",
+                actionability=0,
+                actionability_reason="Content not available",
+                overall_assessment="Content not available from Readwise — only a brief summary was returned.",
+                content_fetch_failed=True,
+            )
+
+        content_warning = ""
+        if is_stub:
+            content_warning = (
+                "NOTE: The content below appears incomplete (much shorter than the "
+                f"reported {doc.word_count} words). Score based only on what is "
+                "available, but note this limitation in your assessment.\n\n"
+            )
+
+        result = await self._v3_strategy.score(
+            title=doc.title,
+            author=doc.author,
+            content=content,
+            word_count=doc.word_count,
+            content_type_hint="article",
+            anthropic_client=self._anthropic,
+            entity_id=doc.id,
+            content_warning=content_warning,
+        )
+
+        if result is None:
+            return None
+
+        if is_stub:
+            result.content_fetch_failed = True
+
+        return result
+
 
 # Singleton instance
 _scorer: ArticleScorer | None = None
 
 
-def get_article_scorer() -> ArticleScorer:
-    """Get or create the article scorer singleton."""
+def get_article_scorer(strategy: ScoringStrategy | None = None) -> ArticleScorer:
+    """Get or create the article scorer singleton.
+
+    Args:
+        strategy: Optional scoring strategy override. When provided, a new
+            ArticleScorer is created (bypassing the singleton). When None,
+            returns the cached singleton with the default strategy.
+    """
     global _scorer
+    if strategy is not None:
+        return ArticleScorer(strategy=strategy)
     if _scorer is None:
         _scorer = ArticleScorer()
     return _scorer

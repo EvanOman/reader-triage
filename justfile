@@ -101,6 +101,10 @@ embed:
 reembed:
     uv run python -m tools.embed_articles --reindex
 
+# Backfill v3-binary scores for archived articles
+backfill-v3 *ARGS:
+    uv run python -m tools.backfill_v3 {{ARGS}}
+
 cal-dimensions *ARGS:
     uv run python -m tools.calibrate dimensions {{ARGS}}
 

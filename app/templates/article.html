@@ -53,7 +53,7 @@
     <div class="bg-dark-card rounded-lg p-6 border border-dark-border mt-3 fade-in fade-in-delay-1">
         <!-- Score header with prominent number -->
         <div class="flex items-center justify-between mb-6">
-            <h2 class="text-xs font-medium uppercase tracking-widest text-gray-500">Score</h2>
+            <h2 class="text-xs font-medium uppercase tracking-widest text-gray-500">V2 Categorical Score</h2>
             <div class="flex items-baseline gap-1">
                 <span class="text-3xl font-bold tabular-nums {% if article.info_score >= 60 %}text-accent{% elif article.info_score >= 30 %}text-gray-400{% else %}text-gray-600{% endif %}">{{ article.info_score|int }}</span>
                 <span class="text-sm text-gray-600">/100</span>
@@ -122,6 +122,97 @@
         </div>
         {% endif %}
     </div>
+
+    <!-- v3 Score Card (if available) -->
+    {% if article.v3_info_score is not none %}
+    <div class="bg-dark-card rounded-lg p-6 border border-dark-border mt-3 fade-in fade-in-delay-2">
+        <div class="flex items-center justify-between mb-6">
+            <h2 class="text-xs font-medium uppercase tracking-widest text-gray-500">V3 Binary Score</h2>
+            <div class="flex items-baseline gap-1">
+                <span class="text-3xl font-bold tabular-nums {% if article.v3_info_score >= 60 %}text-blue-400{% elif article.v3_info_score >= 30 %}text-gray-400{% else %}text-gray-600{% endif %}">{{ article.v3_info_score|int }}</span>
+                <span class="text-sm text-gray-600">/100</span>
+            </div>
+        </div>
+
+        <div class="space-y-4">
+            <div>
+                <div class="flex justify-between text-sm mb-1.5">
+                    <span class="text-gray-400">Quotability</span>
+                    <span class="text-gray-500 tabular-nums text-xs">{{ article.v3_specificity_score }}/25</span>
+                </div>
+                <div class="h-1.5 bg-white/[0.07] rounded-full overflow-hidden">
+                    <div class="h-full bg-blue-400/80 rounded-full score-bar" data-width="{{ (article.v3_specificity_score / 25 * 100)|int }}"></div>
+                </div>
+            </div>
+            <div>
+                <div class="flex justify-between text-sm mb-1.5">
+                    <span class="text-gray-400">Surprise Factor</span>
+                    <span class="text-gray-500 tabular-nums text-xs">{{ article.v3_novelty_score }}/25</span>
+                </div>
+                <div class="h-1.5 bg-white/[0.07] rounded-full overflow-hidden">
+                    <div class="h-full bg-blue-400/60 rounded-full score-bar" data-width="{{ (article.v3_novelty_score / 25 * 100)|int }}"></div>
+                </div>
+            </div>
+            <div>
+                <div class="flex justify-between text-sm mb-1.5">
+                    <span class="text-gray-400">Argument Quality</span>
+                    <span class="text-gray-500 tabular-nums text-xs">{{ article.v3_depth_score }}/25</span>
+                </div>
+                <div class="h-1.5 bg-white/[0.07] rounded-full overflow-hidden">
+                    <div class="h-full bg-blue-400/45 rounded-full score-bar" data-width="{{ (article.v3_depth_score / 25 * 100)|int }}"></div>
+                </div>
+            </div>
+            <div>
+                <div class="flex justify-between text-sm mb-1.5">
+                    <span class="text-gray-400">Applicable Insight</span>
+                    <span class="text-gray-500 tabular-nums text-xs">{{ article.v3_actionability_score }}/25</span>
+                </div>
+                <div class="h-1.5 bg-white/[0.07] rounded-full overflow-hidden">
+                    <div class="h-full bg-blue-400/30 rounded-full score-bar" data-width="{{ (article.v3_actionability_score / 25 * 100)|int }}"></div>
+                </div>
+            </div>
+        </div>
+
+        {% if article.v3_overall_assessment %}
+        <div class="mt-6 pt-5 border-t border-dark-border">
+            <h3 class="text-xs font-medium uppercase tracking-widest text-gray-500 mb-2">V3 Assessment</h3>
+            <p class="text-sm text-gray-300 leading-relaxed">{{ article.v3_overall_assessment }}</p>
+        </div>
+        {% endif %}
+
+        {% if article.v3_raw_responses %}
+        <div class="mt-5 pt-5 border-t border-dark-border">
+            <h3 class="text-xs font-medium uppercase tracking-widest text-gray-500 mb-3">Individual Questions</h3>
+            <div class="space-y-2">
+                {% set q_labels = {
+                    'q1': 'Memorable phrase', 'q2': 'Specific data point', 'q3': 'Standalone passage', 'q4': 'Expert quote',
+                    'q5': 'Contradicts assumptions', 'q6': 'Unexpected lens', 'q7': 'Novel example', 'q8': 'Summary of known (penalty)',
+                    'q9': 'Clear position', 'q10': 'Concrete evidence', 'q11': 'Practitioner experience', 'q12': 'Fits in a tweet (penalty)',
+                    'q13': 'Named framework', 'q14': 'Applicable technique', 'q15': 'Actionable detail', 'q16': 'Narrow audience (penalty)',
+                    'q17': 'Content complete', 'q18': 'Beyond search results', 'q19': 'Expert learns new thing', 'q20': 'News/announcement (penalty)'
+                } %}
+                {% for i in range(1, 21) %}
+                {% set qkey = 'q' ~ i %}
+                {% set val = article.v3_raw_responses[qkey] %}
+                {% set reason = article.v3_raw_responses[qkey ~ '_reason'] %}
+                {% set is_penalty = i in [8, 12, 16, 20] %}
+                <div class="flex items-start gap-2 text-xs">
+                    <span class="flex-shrink-0 w-4 mt-0.5 {% if val and not is_penalty %}text-green-400{% elif val and is_penalty %}text-red-400{% else %}text-gray-600{% endif %}">
+                        {% if val %}&#10003;{% else %}&#10007;{% endif %}
+                    </span>
+                    <div>
+                        <span class="text-gray-400 font-medium">Q{{ i }}: {{ q_labels[qkey] }}</span>
+                        {% if reason %}
+                        <span class="text-gray-500 ml-1">- {{ reason }}</span>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
 
     <!-- Summary Card (if available) -->
     {% if article.summary_text %}

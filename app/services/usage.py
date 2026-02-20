@@ -52,8 +52,8 @@ async def log_usage(
                 session.add(entry)
                 await session.commit()
             return
-        except Exception:
+        except Exception as exc:
             if attempt < 2:
                 await asyncio.sleep(0.5 * (attempt + 1))
             else:
-                logger.warning("Failed to log API usage after 3 attempts", exc_info=True)
+                logger.warning("Failed to log API usage after 3 attempts: %s", exc)

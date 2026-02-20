@@ -59,6 +59,9 @@ class Article(Base):
 
     # Relationships
     score: Mapped["ArticleScore | None"] = relationship(back_populates="article", uselist=False)
+    binary_score: Mapped["BinaryArticleScore | None"] = relationship(
+        back_populates="article", uselist=False
+    )
     summary: Mapped["Summary | None"] = relationship(back_populates="article", uselist=False)
     tags: Mapped[list["ArticleTag"]] = relationship(
         back_populates="article", cascade="all, delete-orphan"
@@ -115,6 +118,48 @@ class ArticleScore(Base):
     __table_args__ = (
         Index("idx_scores_priority", "priority_score"),
         Index("idx_scores_info", "info_score"),
+    )
+
+
+class BinaryArticleScore(Base):
+    """v3-binary score for an article using 20 weighted binary questions."""
+
+    __tablename__ = "article_scores_v3"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    article_id: Mapped[str] = mapped_column(String(50), ForeignKey("articles.id"), unique=True)
+
+    # Score components (0-25 each, total 0-100)
+    info_score: Mapped[float] = mapped_column(Float, default=0.0)
+    specificity_score: Mapped[int] = mapped_column(Integer, default=0)
+    novelty_score: Mapped[int] = mapped_column(Integer, default=0)
+    depth_score: Mapped[int] = mapped_column(Integer, default=0)
+    actionability_score: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Full binary responses (JSON text with q1-q20 booleans + reasons)
+    raw_responses: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Explanations
+    score_reasons: Mapped[str] = mapped_column(Text, default="[]")  # JSON list
+    overall_assessment: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Content quality flags
+    content_fetch_failed: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # Metadata
+    model_used: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    scoring_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    scored_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # Calibration data: total highlighted words across all highlights for this article
+    highlighted_words: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Relationships
+    article: Mapped["Article"] = relationship(back_populates="binary_score")
+
+    __table_args__ = (
+        Index("idx_v3_scores_info", "info_score"),
+        Index("idx_v3_scores_article", "article_id"),
     )
 
 
@@ -286,7 +331,12 @@ async def get_engine():
     global _engine
     if _engine is None:
         settings = get_settings()
-        _engine = create_async_engine(settings.database_url, echo=False)
+        # Set busy timeout via connect_args so SQLite waits for locks
+        # instead of immediately raising "database is locked".
+        _engine = create_async_engine(
+            settings.database_url, echo=False, connect_args={"timeout": 30}
+        )
+
         # Instrument for OTel tracing
         try:
             from app.tracing import instrument_engine
@@ -312,6 +362,11 @@ async def init_db():
     Also handles lightweight schema migrations for new columns.
     """
     engine = await get_engine()
+
+    # Enable WAL mode for better concurrent read/write performance
+    async with engine.begin() as conn:
+        await conn.execute(text("PRAGMA journal_mode=WAL"))
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 

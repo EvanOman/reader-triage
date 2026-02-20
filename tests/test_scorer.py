@@ -76,7 +76,7 @@ class TestScoreCalculation:
     async def test_applicable_scores_mapping(self):
         assert APPLICABLE_SCORES == {"broadly": 13, "narrowly": 7, "not_really": 0}
 
-    @patch("app.services.scorer.log_usage", new_callable=AsyncMock)
+    @patch("app.services.scoring_strategy.log_usage", new_callable=AsyncMock)
     async def test_max_score_all_categories(self, mock_log_usage):
         """All-max categorical answers produce (25+25+25+25) = 100."""
         data = make_claude_response(
@@ -102,7 +102,7 @@ class TestScoreCalculation:
         assert result.actionability == 25
         assert result.total == 100
 
-    @patch("app.services.scorer.log_usage", new_callable=AsyncMock)
+    @patch("app.services.scoring_strategy.log_usage", new_callable=AsyncMock)
     async def test_min_score_all_categories(self, mock_log_usage):
         """All-min categorical answers produce 0."""
         data = make_claude_response(
@@ -128,7 +128,7 @@ class TestScoreCalculation:
         assert result.actionability == 0
         assert result.total == 0
 
-    @patch("app.services.scorer.log_usage", new_callable=AsyncMock)
+    @patch("app.services.scoring_strategy.log_usage", new_callable=AsyncMock)
     async def test_mixed_score_calculation(self, mock_log_usage):
         """Mixed categoricals produce expected intermediate scores."""
         data = make_claude_response(
@@ -219,7 +219,7 @@ class TestInfoScore:
         )
         assert score.content_fetch_failed is False
 
-    @patch("app.services.scorer.log_usage", new_callable=AsyncMock)
+    @patch("app.services.scoring_strategy.log_usage", new_callable=AsyncMock)
     async def test_score_clamped_to_0_25(self, mock_log_usage):
         """Scores from _score_document are clamped to [0, 25] per dimension."""
         # novel_framing(15) + original_analysis(10) = 25 -- at the max boundary
@@ -486,7 +486,7 @@ def _build_scorer(claude_response_data: dict) -> ArticleScorer:
 class TestScoreDocumentIntegration:
     """Test _score_document with mocked Claude responses."""
 
-    @patch("app.services.scorer.log_usage", new_callable=AsyncMock)
+    @patch("app.services.scoring_strategy.log_usage", new_callable=AsyncMock)
     async def test_returns_none_for_empty_content(self, mock_log_usage):
         """Documents with no content and no summary return None."""
         scorer = _build_scorer({})
@@ -494,7 +494,7 @@ class TestScoreDocumentIntegration:
         result = await scorer._score_document(doc)
         assert result is None
 
-    @patch("app.services.scorer.log_usage", new_callable=AsyncMock)
+    @patch("app.services.scoring_strategy.log_usage", new_callable=AsyncMock)
     async def test_returns_none_for_blank_content(self, mock_log_usage):
         """Documents with blank content and no summary return None."""
         scorer = _build_scorer({})
@@ -502,7 +502,7 @@ class TestScoreDocumentIntegration:
         result = await scorer._score_document(doc)
         assert result is None
 
-    @patch("app.services.scorer.log_usage", new_callable=AsyncMock)
+    @patch("app.services.scoring_strategy.log_usage", new_callable=AsyncMock)
     async def test_falls_back_to_summary_when_no_content(self, mock_log_usage):
         """When content is empty but summary exists, summary is used for scoring.
 
@@ -518,7 +518,7 @@ class TestScoreDocumentIntegration:
         assert result is not None
         assert result.specificity == 9  # a_few -> 9
 
-    @patch("app.services.scorer.log_usage", new_callable=AsyncMock)
+    @patch("app.services.scoring_strategy.log_usage", new_callable=AsyncMock)
     async def test_stub_without_content_returns_fetch_failed(self, mock_log_usage):
         """Stub document with only summary returns content_fetch_failed InfoScore."""
         scorer = _build_scorer({})
@@ -530,7 +530,7 @@ class TestScoreDocumentIntegration:
         assert result.total == 0
         assert "Content not available" in result.overall_assessment
 
-    @patch("app.services.scorer.log_usage", new_callable=AsyncMock)
+    @patch("app.services.scoring_strategy.log_usage", new_callable=AsyncMock)
     async def test_stub_with_content_marks_content_failed(self, mock_log_usage):
         """Stub that has content (but way too short) marks content_fetch_failed."""
         data = make_claude_response({"standalone_passages": "none"})
@@ -543,7 +543,7 @@ class TestScoreDocumentIntegration:
         assert result is not None
         assert result.content_fetch_failed is True
 
-    @patch("app.services.scorer.log_usage", new_callable=AsyncMock)
+    @patch("app.services.scoring_strategy.log_usage", new_callable=AsyncMock)
     async def test_reasons_passed_through(self, mock_log_usage):
         """Reason strings from Claude response are passed through to InfoScore."""
         data = make_claude_response(
@@ -566,7 +566,7 @@ class TestScoreDocumentIntegration:
         assert result.actionability_reason == "Broadly useful"
         assert result.overall_assessment == "Excellent article overall."
 
-    @patch("app.services.scorer.log_usage", new_callable=AsyncMock)
+    @patch("app.services.scoring_strategy.log_usage", new_callable=AsyncMock)
     async def test_handles_unknown_categorical_values_gracefully(self, mock_log_usage):
         """Unknown enum values should map to 0 via .get() defaults."""
         data = make_claude_response(
@@ -586,7 +586,7 @@ class TestScoreDocumentIntegration:
         # novelty: novel_framing(True)=15 + unknown_type=0 -> 15
         assert result.novelty == 15
 
-    @patch("app.services.scorer.log_usage", new_callable=AsyncMock)
+    @patch("app.services.scoring_strategy.log_usage", new_callable=AsyncMock)
     async def test_handles_markdown_wrapped_json(self, mock_log_usage):
         """Claude sometimes wraps JSON in markdown code fences."""
         data = make_claude_response()

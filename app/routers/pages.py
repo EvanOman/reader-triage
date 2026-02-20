@@ -15,6 +15,7 @@ from app.models.article import (
     ArticleScore,
     ArticleTag,
     Author,
+    BinaryArticleScore,
     Summary,
     get_session_factory,
 )
@@ -45,14 +46,13 @@ templates.env.filters["shortdate"] = _shortdate
 async def dashboard(request: Request):
     """Render the dashboard with top articles."""
     active_tag = request.query_params.get("tag")
-    active_tier = request.query_params.get("tier")  # high, medium, low
-    active_sort = request.query_params.get("sort")  # score, added, published
+    active_sort = request.query_params.get("sort")  # v2_score, v3_score, added, published
 
     factory = await get_session_factory()
     async with factory() as session:
         not_archived = Article.location != "archive"
 
-        # Get stats (excluding archived)
+        # Get total article count (excluding archived)
         total_result = await session.execute(
             select(func.count(ArticleScore.id))
             .join(Article, ArticleScore.article_id == Article.id)
@@ -60,40 +60,25 @@ async def dashboard(request: Request):
         )
         total = total_result.scalar() or 0
 
-        high_result = await session.execute(
-            select(func.count(ArticleScore.id))
-            .join(Article, ArticleScore.article_id == Article.id)
-            .where(not_archived, ArticleScore.info_score >= 60)
+        # Get articles with both v2 and v3 scores
+        articles_query = (
+            select(Article, ArticleScore, BinaryArticleScore)
+            .join(ArticleScore)
+            .outerjoin(BinaryArticleScore)
+            .where(not_archived)
         )
-        high = high_result.scalar() or 0
-
-        medium_result = await session.execute(
-            select(func.count(ArticleScore.id))
-            .join(Article, ArticleScore.article_id == Article.id)
-            .where(not_archived, ArticleScore.info_score >= 30, ArticleScore.info_score < 60)
-        )
-        medium = medium_result.scalar() or 0
-
-        low_result = await session.execute(
-            select(func.count(ArticleScore.id))
-            .join(Article, ArticleScore.article_id == Article.id)
-            .where(not_archived, ArticleScore.info_score < 30)
-        )
-        low = low_result.scalar() or 0
-
-        # Authors synced
-        authors_result = await session.execute(select(func.count(Author.id)))
-        authors_synced = authors_result.scalar() or 0
-
-        # Get articles, excluding archived, optionally filtered by tag/tier
-        articles_query = select(Article, ArticleScore).join(ArticleScore).where(not_archived)
-        if active_sort == "added":
+        if active_sort == "v3_score":
+            articles_query = articles_query.order_by(
+                BinaryArticleScore.info_score.desc().nulls_last()
+            )
+        elif active_sort == "added":
             articles_query = articles_query.order_by(
                 Article.readwise_created_at.desc().nulls_last()
             )
         elif active_sort == "published":
             articles_query = articles_query.order_by(Article.published_date.desc().nulls_last())
         else:
+            # Default: v2 score
             articles_query = articles_query.order_by(
                 ArticleScore.info_score.desc(), ArticleScore.priority_score.desc()
             )
@@ -101,14 +86,6 @@ async def dashboard(request: Request):
             articles_query = articles_query.join(ArticleTag).where(
                 ArticleTag.tag_slug == active_tag
             )
-        if active_tier == "high":
-            articles_query = articles_query.where(ArticleScore.info_score >= 60)
-        elif active_tier == "medium":
-            articles_query = articles_query.where(
-                ArticleScore.info_score >= 30, ArticleScore.info_score < 60
-            )
-        elif active_tier == "low":
-            articles_query = articles_query.where(ArticleScore.info_score < 30)
         articles_query = articles_query.limit(30)
 
         top_articles_result = await session.execute(articles_query)
@@ -116,7 +93,7 @@ async def dashboard(request: Request):
 
         # Build response
         articles = []
-        for article, score in top_articles_rows:
+        for article, score, v3_score in top_articles_rows:
             summary_result = await session.execute(
                 select(Summary).where(Summary.article_id == article.id)
             )
@@ -148,6 +125,12 @@ async def dashboard(request: Request):
                     "tags": tag_slugs,
                     "added_at": article.readwise_created_at,
                     "published_date": article.published_date,
+                    "v3_info_score": v3_score.info_score if v3_score else None,
+                    "v3_specificity_score": v3_score.specificity_score if v3_score else None,
+                    "v3_novelty_score": v3_score.novelty_score if v3_score else None,
+                    "v3_depth_score": v3_score.depth_score if v3_score else None,
+                    "v3_actionability_score": v3_score.actionability_score if v3_score else None,
+                    "v3_overall_assessment": v3_score.overall_assessment if v3_score else None,
                 }
             )
 
@@ -177,15 +160,10 @@ async def dashboard(request: Request):
             "request": request,
             "stats": {
                 "total_articles": total,
-                "high_value_count": high,
-                "medium_value_count": medium,
-                "low_value_count": low,
-                "authors_synced": authors_synced,
             },
             "articles": articles,
             "available_tags": available_tags,
             "active_tag": active_tag,
-            "active_tier": active_tier,
             "active_sort": active_sort,
             "tag_names": tag_names,
             "tag_colors": tag_colors,
@@ -209,6 +187,11 @@ async def article_detail(request: Request, article_id: str):
             select(ArticleScore).where(ArticleScore.article_id == article_id)
         )
         score = score_result.scalar_one_or_none()
+
+        v3_result = await session.execute(
+            select(BinaryArticleScore).where(BinaryArticleScore.article_id == article_id)
+        )
+        v3_score = v3_result.scalar_one_or_none()
 
         summary_result = await session.execute(
             select(Summary).where(Summary.article_id == article_id)
@@ -235,6 +218,14 @@ async def article_detail(request: Request, article_id: str):
         )
         tag_slugs = [row[0] for row in tag_result.all()]
 
+        # Parse v3 raw responses for individual question display
+        v3_raw = None
+        if v3_score and v3_score.raw_responses:
+            try:
+                v3_raw = json.loads(v3_score.raw_responses)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
         article_data = {
             "id": article.id,
             "title": article.title,
@@ -260,6 +251,13 @@ async def article_detail(request: Request, article_id: str):
             "tags": tag_slugs,
             "added_at": article.readwise_created_at,
             "published_date": article.published_date,
+            "v3_info_score": v3_score.info_score if v3_score else None,
+            "v3_specificity_score": v3_score.specificity_score if v3_score else None,
+            "v3_novelty_score": v3_score.novelty_score if v3_score else None,
+            "v3_depth_score": v3_score.depth_score if v3_score else None,
+            "v3_actionability_score": v3_score.actionability_score if v3_score else None,
+            "v3_overall_assessment": v3_score.overall_assessment if v3_score else None,
+            "v3_raw_responses": v3_raw,
         }
 
     tag_names = get_tag_names()

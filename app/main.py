@@ -6,6 +6,10 @@ from contextlib import asynccontextmanager
 
 logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s: %(message)s")
 
+# Quiet noisy library loggers that flood the systemd journal
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+
 from fastapi import FastAPI
 
 import app.models.podcast  # noqa: F401  # Register podcast models before init_db
