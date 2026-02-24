@@ -1,7 +1,7 @@
 """Integration tests for scorer orchestration methods.
 
 Tests _process_documents, rescore_failed_articles, and recompute_priorities
-using fake Readwise, mocked Anthropic, and real in-memory SQLite.
+using fake Readwise, mocked DSPy strategies, and real in-memory SQLite.
 """
 
 import json
@@ -12,12 +12,62 @@ import pytest
 from readwise_sdk.exceptions import RateLimitError
 from sqlalchemy import select
 
-from app.models.article import Article, ArticleScore, Author, BinaryArticleScore
+from app.models.article import Article, ArticleScore, Author, BinaryArticleScore, V4ArticleScore
 from app.services.scorer import CURRENT_SCORING_VERSION, ArticleScorer
-from tests.factories import make_claude_response, make_document, mock_anthropic_response
+from app.services.scoring_models import V2CategoricalOutput, V3BinaryOutput, V4TieredOutput
+from tests.factories import (
+    make_claude_response,
+    make_document,
+    make_dspy_prediction,
+    mock_lm_history,
+)
 
 # Default Claude response produces: specificity=17, novelty=25, depth=25, actionability=25 → total=92
 _DEFAULT_TOTAL = 92
+
+
+# ---------------------------------------------------------------------------
+# DSPy mock helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_v2_prediction(data: dict) -> MagicMock:
+    """Create a mock DSPy Prediction for v2-categorical output."""
+    output = V2CategoricalOutput(**data)
+    return make_dspy_prediction(output)
+
+
+def _make_v3_prediction(data: dict) -> MagicMock:
+    """Create a mock DSPy Prediction for v3-binary output."""
+    output = V3BinaryOutput(**data)
+    return make_dspy_prediction(output)
+
+
+def _make_v4_prediction(data: dict) -> MagicMock:
+    """Create a mock DSPy Prediction for v4-binary output."""
+    output = V4TieredOutput(**data)
+    return make_dspy_prediction(output)
+
+
+def _setup_all_strategy_mocks(scorer: ArticleScorer) -> None:
+    """Set up default DSPy mocks on all three strategies of an ArticleScorer."""
+    # v2 strategy
+    v2_data = make_claude_response()
+    scorer._strategy._predict_article = MagicMock(return_value=_make_v2_prediction(v2_data))
+    scorer._strategy._predict_podcast = MagicMock(return_value=_make_v2_prediction(v2_data))
+    scorer._strategy._lm = mock_lm_history()
+
+    # v3 strategy
+    v3_data = _make_v3_response()
+    scorer._v3_strategy._predict_article = MagicMock(return_value=_make_v3_prediction(v3_data))
+    scorer._v3_strategy._predict_podcast = MagicMock(return_value=_make_v3_prediction(v3_data))
+    scorer._v3_strategy._lm = mock_lm_history()
+
+    # v4 strategy
+    v4_data = _make_v4_response()
+    scorer._v4_strategy._predict_article = MagicMock(return_value=_make_v4_prediction(v4_data))
+    scorer._v4_strategy._predict_podcast = MagicMock(return_value=_make_v4_prediction(v4_data))
+    scorer._v4_strategy._lm = mock_lm_history()
 
 
 # ---------------------------------------------------------------------------
@@ -26,29 +76,18 @@ _DEFAULT_TOTAL = 92
 
 
 @pytest.fixture
-def mock_claude():
-    """A mock Anthropic client returning a default high-quality score."""
-    client = MagicMock()
-    data = make_claude_response()
-    client.messages.create.return_value = mock_anthropic_response(data)
-    return client
-
-
-@pytest.fixture
-def scorer(fake_readwise, mock_claude):
-    """ArticleScorer wired to fake Readwise and mock Anthropic."""
-    with (
-        patch("app.services.scorer.Anthropic") as cls,
-        patch("app.services.scorer.get_readwise_service"),
-    ):
-        cls.return_value = mock_claude
+def scorer(fake_readwise):
+    """ArticleScorer wired to fake Readwise with mocked DSPy strategies."""
+    with patch("app.services.scorer.get_readwise_service"):
         s = ArticleScorer()
         s._readwise = fake_readwise
+
+    _setup_all_strategy_mocks(s)
     return s
 
 
 def _make_v3_response(overrides: dict | None = None) -> dict:
-    """Build a v3-binary Claude response with all 20 questions."""
+    """Build a v3-binary response with all 20 questions."""
     base: dict[str, object] = {}
     for i in range(1, 21):
         base[f"q{i}"] = True
@@ -56,6 +95,25 @@ def _make_v3_response(overrides: dict | None = None) -> dict:
     for q in ["q8", "q12", "q16", "q20"]:
         base[q] = False
         base[f"{q}_reason"] = "Not a penalty case"
+    base["overall_assessment"] = "Strong article."
+    if overrides:
+        base.update(overrides)
+    return base
+
+
+def _make_v4_response(overrides: dict | None = None) -> dict:
+    """Build a v4-binary response with all 24 questions.
+
+    Default: all positive questions yes, all penalty questions no → score 100.
+    """
+    base: dict[str, object] = {}
+    for i in range(1, 25):
+        base[f"q{i}_evidence"] = f"Evidence for q{i}"
+        base[f"q{i}"] = True
+    # Penalty questions → no (not penalized)
+    for q in ["q6", "q12", "q18", "q24"]:
+        base[q] = False
+        base[f"{q}_evidence"] = ""
     base["overall_assessment"] = "Strong article."
     if overrides:
         base.update(overrides)
@@ -171,7 +229,7 @@ class TestProcessDocuments:
     async def test_already_scored_with_current_version_skipped(self, scorer, fake_readwise, deps):
         sf = deps["session_factory"]
 
-        # Pre-insert with current version v2 score AND v3 score
+        # Pre-insert with current version v2, v3, and v4 scores
         async with sf() as session:
             article = Article(
                 id="skip-1",
@@ -199,16 +257,26 @@ class TestProcessDocuments:
                 actionability_score=17,
                 scoring_version="v3-binary",
             )
+            v4_score = V4ArticleScore(
+                article_id="skip-1",
+                info_score=70,
+                specificity_score=18,
+                novelty_score=18,
+                depth_score=17,
+                actionability_score=17,
+                scoring_version="v4-binary",
+            )
             session.add(article)
             session.add(score)
             session.add(v3_score)
+            session.add(v4_score)
             await session.commit()
 
         doc = make_document(id="skip-1")
         meta_doc = replace(doc, content=None)
         result = await scorer._process_documents([meta_doc])
 
-        # get_document should NOT be called (no scoring needed for either v2 or v3)
+        # get_document should NOT be called (no scoring needed for any version)
         assert "skip-1" not in fake_readwise.get_document_calls
         assert result.newly_scored == 0
 
@@ -323,10 +391,8 @@ class TestProcessDocuments:
             assert score.author_boost == 10.0
             assert score.priority_score == score.info_score + 10.0
 
-    async def test_skip_recommended_when_score_below_30(
-        self, scorer, fake_readwise, deps, mock_claude
-    ):
-        # Override Claude to return all-zero scores
+    async def test_skip_recommended_when_score_below_30(self, scorer, fake_readwise, deps):
+        # Override v2 strategy to return all-zero scores
         low_data = make_claude_response(
             {
                 "standalone_passages": "none",
@@ -339,7 +405,8 @@ class TestProcessDocuments:
                 "applicable_ideas": "not_really",
             }
         )
-        mock_claude.messages.create.return_value = mock_anthropic_response(low_data)
+        scorer._strategy._predict_article = MagicMock(return_value=_make_v2_prediction(low_data))
+        scorer._strategy._predict_podcast = MagicMock(return_value=_make_v2_prediction(low_data))
 
         doc = make_document(id="low-1")
         fake_readwise.add_document(doc)
@@ -386,11 +453,12 @@ class TestProcessDocuments:
         # Scoring still proceeded using the summary
         assert result.newly_scored == 1
 
-    async def test_claude_returning_none_skips_article(
-        self, scorer, fake_readwise, deps, mock_claude
-    ):
+    async def test_claude_returning_none_skips_article(self, scorer, fake_readwise, deps):
         """When _score_document returns None, article is skipped."""
-        mock_claude.messages.create.side_effect = Exception("Claude API error")
+        # Make all strategies' predict raise to simulate API failure
+        scorer._strategy._predict_article = MagicMock(side_effect=Exception("API error"))
+        scorer._v3_strategy._predict_article = MagicMock(side_effect=Exception("API error"))
+        scorer._v4_strategy._predict_article = MagicMock(side_effect=Exception("API error"))
 
         doc = make_document(id="fail-1")
         fake_readwise.add_document(doc)
@@ -547,9 +615,7 @@ class TestRescoreFailedArticles:
 
         assert count == 0
 
-    async def test_skips_content_fetch_failed_zero_score(
-        self, scorer, fake_readwise, deps, mock_claude
-    ):
+    async def test_skips_content_fetch_failed_zero_score(self, scorer, fake_readwise, deps):
         """When rescored content is still a stub with zero score, skip the update."""
         sf = deps["session_factory"]
         await self._insert_article_with_score(
@@ -560,7 +626,7 @@ class TestRescoreFailedArticles:
         doc = make_document(id="still-stub-1", content="Very short.", word_count=2000)
         fake_readwise.add_document(doc)
 
-        # Configure Claude to return all-zero scores
+        # Configure v2 strategy to return all-zero scores
         zero_data = make_claude_response(
             {
                 "standalone_passages": "none",
@@ -573,7 +639,8 @@ class TestRescoreFailedArticles:
                 "applicable_ideas": "not_really",
             }
         )
-        mock_claude.messages.create.return_value = mock_anthropic_response(zero_data)
+        scorer._strategy._predict_article = MagicMock(return_value=_make_v2_prediction(zero_data))
+        scorer._strategy._predict_podcast = MagicMock(return_value=_make_v2_prediction(zero_data))
 
         count = await scorer.rescore_failed_articles()
 
@@ -727,24 +794,18 @@ class TestRecomputePriorities:
 
 
 # ---------------------------------------------------------------------------
-# Dual scoring (v2 + v3) tests
+# Triple scoring (v2 + v3 + v4) tests
 # ---------------------------------------------------------------------------
 
 
-class TestDualScoring:
-    """Tests for v2 + v3 scoring running in parallel."""
+class TestTripleScoring:
+    """Tests for v2 + v3 + v4 scoring running independently."""
 
-    async def test_new_article_gets_both_v2_and_v3_scores(
-        self, scorer, fake_readwise, deps, mock_claude
-    ):
-        """A new article should get both a v2 and v3 score."""
-        # Configure mock to return v3 responses on the second call
-        v3_data = _make_v3_response()
-        v2_resp = mock_anthropic_response(make_claude_response())
-        v3_resp = mock_anthropic_response(v3_data)
-        mock_claude.messages.create.side_effect = [v2_resp, v3_resp]
+    async def test_new_article_gets_all_three_scores(self, scorer, fake_readwise, deps):
+        """A new article should get v2, v3, and v4 scores."""
+        # All three strategies already have default mocks from the scorer fixture
 
-        doc = make_document(id="dual-1", title="Dual Score Article")
+        doc = make_document(id="triple-1", title="Triple Score Article")
         fake_readwise.add_document(doc)
         meta_doc = replace(doc, content=None)
 
@@ -753,7 +814,7 @@ class TestDualScoring:
         async with deps["session_factory"]() as session:
             v2_score = (
                 await session.execute(
-                    select(ArticleScore).where(ArticleScore.article_id == "dual-1")
+                    select(ArticleScore).where(ArticleScore.article_id == "triple-1")
                 )
             ).scalar_one()
             assert v2_score.info_score == _DEFAULT_TOTAL
@@ -761,18 +822,25 @@ class TestDualScoring:
 
             v3_score = (
                 await session.execute(
-                    select(BinaryArticleScore).where(BinaryArticleScore.article_id == "dual-1")
+                    select(BinaryArticleScore).where(BinaryArticleScore.article_id == "triple-1")
                 )
             ).scalar_one()
-            assert v3_score.info_score == 100  # All positive yes, all penalties no
             assert v3_score.scoring_version == "v3-binary"
             assert v3_score.raw_responses is not None
 
-    async def test_v3_failure_does_not_block_v2(self, scorer, fake_readwise, deps, mock_claude):
-        """If v3 scoring fails, v2 should still succeed."""
-        v2_resp = mock_anthropic_response(make_claude_response())
-        # v3 call raises an exception
-        mock_claude.messages.create.side_effect = [v2_resp, Exception("v3 API fail")]
+            v4_score = (
+                await session.execute(
+                    select(V4ArticleScore).where(V4ArticleScore.article_id == "triple-1")
+                )
+            ).scalar_one()
+            assert v4_score.info_score == 100  # All positive yes, all penalties no
+            assert v4_score.scoring_version == "v4-binary"
+            assert v4_score.raw_responses is not None
+
+    async def test_v3_failure_does_not_block_v2_or_v4(self, scorer, fake_readwise, deps):
+        """If v3 scoring fails, v2 and v4 should still succeed."""
+        # Make v3 strategy's predict raise
+        scorer._v3_strategy._predict_article = MagicMock(side_effect=Exception("v3 API fail"))
 
         doc = make_document(id="v3fail-1")
         fake_readwise.add_document(doc)
@@ -797,10 +865,17 @@ class TestDualScoring:
             ).scalar_one_or_none()
             assert v3 is None  # v3 failed, no record
 
-    async def test_already_v2_scored_article_still_gets_v3(
-        self, scorer, fake_readwise, deps, mock_claude
+            v4 = (
+                await session.execute(
+                    select(V4ArticleScore).where(V4ArticleScore.article_id == "v3fail-1")
+                )
+            ).scalar_one()
+            assert v4.info_score == 100
+
+    async def test_already_v2_scored_article_still_gets_v3_and_v4(
+        self, scorer, fake_readwise, deps
     ):
-        """An article with a current v2 score but no v3 should get v3 scored."""
+        """An article with a current v2 score but no v3/v4 should get both scored."""
         sf = deps["session_factory"]
 
         # Pre-insert article with current v2 score
@@ -826,9 +901,7 @@ class TestDualScoring:
             session.add(score)
             await session.commit()
 
-        # Configure mock for v3 only (v2 is skipped)
-        v3_data = _make_v3_response()
-        mock_claude.messages.create.return_value = mock_anthropic_response(v3_data)
+        # v3 and v4 strategies already have default mocks from the scorer fixture
 
         doc = make_document(id="v2only-1")
         fake_readwise.add_document(doc)
@@ -851,5 +924,13 @@ class TestDualScoring:
                     select(BinaryArticleScore).where(BinaryArticleScore.article_id == "v2only-1")
                 )
             ).scalar_one()
-            assert v3.info_score == 100
             assert v3.scoring_version == "v3-binary"
+
+            # v4 should now exist
+            v4 = (
+                await session.execute(
+                    select(V4ArticleScore).where(V4ArticleScore.article_id == "v2only-1")
+                )
+            ).scalar_one()
+            assert v4.info_score == 100
+            assert v4.scoring_version == "v4-binary"

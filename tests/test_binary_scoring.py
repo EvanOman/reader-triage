@@ -1,16 +1,16 @@
 """Tests for v3-binary scoring: computation, strategy, and gatekeeper logic."""
 
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from anthropic.types import TextBlock
 
+from app.services.scoring_models import V3BinaryOutput
 from app.services.scoring_strategy import (
     BinaryScoringStrategy,
     compute_binary_dimension,
     compute_binary_total,
 )
+from tests.factories import make_dspy_prediction, mock_lm_history
 
 # ---------------------------------------------------------------------------
 # Pure score computation tests
@@ -110,12 +110,12 @@ class TestComputeBinaryDimension:
 
 
 # ---------------------------------------------------------------------------
-# BinaryScoringStrategy tests (mocked Claude)
+# BinaryScoringStrategy tests (mocked DSPy)
 # ---------------------------------------------------------------------------
 
 
 def _make_binary_response(overrides: dict | None = None) -> dict:
-    """Build a full v3-binary Claude response with all 20 questions."""
+    """Build a full v3-binary response with all 20 questions."""
     base: dict[str, object] = {}
     for i in range(1, 21):
         base[f"q{i}"] = True
@@ -130,18 +130,13 @@ def _make_binary_response(overrides: dict | None = None) -> dict:
     return base
 
 
-def _mock_claude_response(
-    data: dict, input_tokens: int = 500, output_tokens: int = 200
-) -> MagicMock:
-    """Create a mock Anthropic messages.create() return value."""
-    content_block = TextBlock(type="text", text=json.dumps(data))
-    usage = MagicMock()
-    usage.input_tokens = input_tokens
-    usage.output_tokens = output_tokens
-    response = MagicMock()
-    response.content = [content_block]
-    response.usage = usage
-    return response
+def _setup_strategy_mock(strategy, response_data: dict) -> None:
+    """Set up DSPy mocks on a BinaryScoringStrategy instance."""
+    output = V3BinaryOutput(**response_data)
+    mock_pred = make_dspy_prediction(output)
+    strategy._predict_article = MagicMock(return_value=mock_pred)
+    strategy._predict_podcast = MagicMock(return_value=mock_pred)
+    strategy._lm = mock_lm_history()
 
 
 class TestBinaryScoringStrategy:
@@ -151,25 +146,18 @@ class TestBinaryScoringStrategy:
     def strategy(self):
         return BinaryScoringStrategy()
 
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        data = _make_binary_response()
-        client.messages.create.return_value = _mock_claude_response(data)
-        return client
-
     async def test_version(self, strategy):
         assert strategy.version == "v3-binary"
 
     @patch("app.services.scoring_strategy.log_usage", new_callable=AsyncMock)
-    async def test_score_returns_info_score(self, mock_log, strategy, mock_client):
+    async def test_score_returns_info_score(self, mock_log, strategy):
+        _setup_strategy_mock(strategy, _make_binary_response())
         result = await strategy.score(
             title="Test Article",
             author="Test Author",
             content="Some content here.",
             word_count=1000,
             content_type_hint="article",
-            anthropic_client=mock_client,
             entity_id="test-1",
         )
         assert result is not None
@@ -182,11 +170,9 @@ class TestBinaryScoringStrategy:
         assert result.content_fetch_failed is False
 
     @patch("app.services.scoring_strategy.log_usage", new_callable=AsyncMock)
-    async def test_gatekeeper_q17_false_returns_content_fetch_failed(
-        self, mock_log, strategy, mock_client
-    ):
+    async def test_gatekeeper_q17_false_returns_content_fetch_failed(self, mock_log, strategy):
         data = _make_binary_response({"q17": False, "q17_reason": "Content is truncated"})
-        mock_client.messages.create.return_value = _mock_claude_response(data)
+        _setup_strategy_mock(strategy, data)
 
         result = await strategy.score(
             title="Truncated Article",
@@ -194,7 +180,6 @@ class TestBinaryScoringStrategy:
             content="Short stub.",
             word_count=5000,
             content_type_hint="article",
-            anthropic_client=mock_client,
             entity_id="gate-1",
         )
         assert result is not None
@@ -203,41 +188,42 @@ class TestBinaryScoringStrategy:
         assert result.raw_responses is not None
 
     @patch("app.services.scoring_strategy.log_usage", new_callable=AsyncMock)
-    async def test_empty_content_returns_none(self, mock_log, strategy, mock_client):
+    async def test_empty_content_returns_none(self, mock_log, strategy):
         result = await strategy.score(
             title="Empty",
             author="Author",
             content="",
             word_count=0,
             content_type_hint="article",
-            anthropic_client=mock_client,
             entity_id="empty-1",
         )
         assert result is None
 
     @patch("app.services.scoring_strategy.log_usage", new_callable=AsyncMock)
-    async def test_api_error_returns_none(self, mock_log, strategy, mock_client):
-        mock_client.messages.create.side_effect = Exception("API Error")
+    async def test_api_error_returns_none(self, mock_log, strategy):
+        strategy._predict_article = MagicMock(side_effect=Exception("API Error"))
+        strategy._predict_podcast = MagicMock(side_effect=Exception("API Error"))
+        strategy._lm = mock_lm_history()
+
         result = await strategy.score(
             title="Error Article",
             author="Author",
             content="Some content.",
             word_count=500,
             content_type_hint="article",
-            anthropic_client=mock_client,
             entity_id="err-1",
         )
         assert result is None
 
     @patch("app.services.scoring_strategy.log_usage", new_callable=AsyncMock)
-    async def test_podcast_uses_podcast_prompt(self, mock_log, strategy, mock_client):
+    async def test_podcast_uses_podcast_prompt(self, mock_log, strategy):
+        _setup_strategy_mock(strategy, _make_binary_response())
         await strategy.score(
             title="Test Podcast",
             author="Host Name",
             content="Podcast transcript here.",
             word_count=10000,
             content_type_hint="podcast",
-            anthropic_client=mock_client,
             entity_id="pod-1",
         )
         # Verify it was called and used the podcast service name for logging
@@ -245,14 +231,14 @@ class TestBinaryScoringStrategy:
         assert mock_log.call_args.kwargs["service"] == "podcast_scorer_v3"
 
     @patch("app.services.scoring_strategy.log_usage", new_callable=AsyncMock)
-    async def test_dimension_reasons_populated(self, mock_log, strategy, mock_client):
+    async def test_dimension_reasons_populated(self, mock_log, strategy):
+        _setup_strategy_mock(strategy, _make_binary_response())
         result = await strategy.score(
             title="Test",
             author="Author",
             content="Content.",
             word_count=500,
             content_type_hint="article",
-            anthropic_client=mock_client,
             entity_id="reasons-1",
         )
         assert result is not None
@@ -263,7 +249,7 @@ class TestBinaryScoringStrategy:
         assert result.actionability_reason != ""
 
     @patch("app.services.scoring_strategy.log_usage", new_callable=AsyncMock)
-    async def test_low_score_with_penalties(self, mock_log, strategy, mock_client):
+    async def test_low_score_with_penalties(self, mock_log, strategy):
         # All positive no, all penalties yes
         data = _make_binary_response()
         for i in range(1, 21):
@@ -271,7 +257,7 @@ class TestBinaryScoringStrategy:
         for q in ["q8", "q12", "q16", "q20"]:
             data[q] = True
         data["q17"] = True  # Keep gatekeeper passing
-        mock_client.messages.create.return_value = _mock_claude_response(data)
+        _setup_strategy_mock(strategy, data)
 
         result = await strategy.score(
             title="Bad Article",
@@ -279,7 +265,6 @@ class TestBinaryScoringStrategy:
             content="Low quality content.",
             word_count=500,
             content_type_hint="article",
-            anthropic_client=mock_client,
             entity_id="low-1",
         )
         assert result is not None

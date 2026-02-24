@@ -11,7 +11,15 @@ logger = logging.getLogger(__name__)
 MODEL_PRICING: dict[str, tuple[float, float]] = {
     # (input_per_mtok, output_per_mtok)
     "claude-sonnet-4-20250514": (3.0, 15.0),
+    "claude-sonnet-4-5-20250929": (3.0, 15.0),
     "claude-haiku-4-5-20251001": (0.25, 1.25),
+    # LiteLLM-format keys (provider/model)
+    "anthropic/claude-sonnet-4-5-20250929": (3.0, 15.0),
+    "anthropic/claude-haiku-4-5-20251001": (0.25, 1.25),
+    "openai/gpt-5-mini": (0.15, 0.60),
+    # Groq-hosted open-source models
+    "groq/qwen/qwen3-32b": (0.29, 0.59),
+    "groq/moonshotai/kimi-k2-instruct-0905": (1.00, 3.00),
 }
 
 # Default pricing for unknown models

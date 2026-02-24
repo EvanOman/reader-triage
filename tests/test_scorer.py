@@ -1,10 +1,8 @@
 """Tests for the article scorer service."""
 
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from anthropic.types import TextBlock
 
 from app.models.article import Author
 from app.services.scorer import (
@@ -22,15 +20,18 @@ from app.services.scorer import (
     _assessment_indicates_bad_content,
     normalize_author_name,
 )
-from tests.factories import make_claude_response, make_document, mock_anthropic_response
+from app.services.scoring_models import V2CategoricalOutput
+from tests.factories import (
+    make_claude_response,
+    make_document,
+    make_dspy_prediction,
+    mock_lm_history,
+)
 
 
 def _make_scorer_instance() -> ArticleScorer:
     """Build a scorer instance with mocked dependencies (no Claude response configured)."""
-    with (
-        patch("app.services.scorer.Anthropic"),
-        patch("app.services.scorer.get_readwise_service"),
-    ):
+    with patch("app.services.scorer.get_readwise_service"):
         return ArticleScorer()
 
 
@@ -471,15 +472,16 @@ class TestAuthorBoost:
 
 
 def _build_scorer(claude_response_data: dict) -> ArticleScorer:
-    """Build an ArticleScorer with mocked Anthropic client."""
-    with (
-        patch("app.services.scorer.Anthropic") as mock_anthropic_cls,
-        patch("app.services.scorer.get_readwise_service"),
-    ):
-        mock_client = MagicMock()
-        mock_client.messages.create.return_value = mock_anthropic_response(claude_response_data)
-        mock_anthropic_cls.return_value = mock_client
+    """Build an ArticleScorer with mocked scoring strategy."""
+    with patch("app.services.scorer.get_readwise_service"):
         scorer = ArticleScorer()
+
+    # Mock the v2 strategy's predict
+    output = V2CategoricalOutput(**claude_response_data)
+    mock_pred = make_dspy_prediction(output)
+    scorer._strategy._predict_article = MagicMock(return_value=mock_pred)
+    scorer._strategy._predict_podcast = MagicMock(return_value=mock_pred)
+    scorer._strategy._lm = mock_lm_history()
     return scorer
 
 
@@ -587,25 +589,10 @@ class TestScoreDocumentIntegration:
         assert result.novelty == 15
 
     @patch("app.services.scoring_strategy.log_usage", new_callable=AsyncMock)
-    async def test_handles_markdown_wrapped_json(self, mock_log_usage):
-        """Claude sometimes wraps JSON in markdown code fences."""
+    async def test_scoring_works_with_default_response(self, mock_log_usage):
+        """Verify scoring works end-to-end with DSPy mock."""
         data = make_claude_response()
-        with (
-            patch("app.services.scorer.Anthropic") as mock_anthropic_cls,
-            patch("app.services.scorer.get_readwise_service"),
-        ):
-            mock_client = MagicMock()
-            content_block = TextBlock(type="text", text=f"```json\n{json.dumps(data)}\n```")
-            usage = MagicMock()
-            usage.input_tokens = 500
-            usage.output_tokens = 100
-            response = MagicMock()
-            response.content = [content_block]
-            response.usage = usage
-            mock_client.messages.create.return_value = response
-            mock_anthropic_cls.return_value = mock_client
-            scorer = ArticleScorer()
-
+        scorer = _build_scorer(data)
         doc = make_document()
         result = await scorer._score_document(doc)
         assert result is not None

@@ -1,6 +1,6 @@
 """Tests for podcast scorer service."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from app.services.podcast_scorer import PodcastScorer
 from app.services.scorer import InfoScore
@@ -23,8 +23,7 @@ class TestPodcastScorer:
     async def test_score_episode_no_transcript(self):
         """Episodes without transcript should return None."""
         strategy = _make_mock_strategy()
-        with patch("app.services.podcast_scorer.Anthropic"):
-            scorer = PodcastScorer(strategy=strategy)
+        scorer = PodcastScorer(strategy=strategy)
         episode = make_episode(transcript=None)
         result = await scorer.score_episode(episode)
         assert result is None
@@ -32,8 +31,7 @@ class TestPodcastScorer:
     async def test_score_episode_empty_transcript(self):
         """Episodes with empty string transcript should return None."""
         strategy = _make_mock_strategy()
-        with patch("app.services.podcast_scorer.Anthropic"):
-            scorer = PodcastScorer(strategy=strategy)
+        scorer = PodcastScorer(strategy=strategy)
         episode = make_episode(transcript="")
         result = await scorer.score_episode(episode)
         assert result is None
@@ -53,8 +51,7 @@ class TestPodcastScorer:
         )
         strategy = _make_mock_strategy(return_value=mock_score)
 
-        with patch("app.services.podcast_scorer.Anthropic"):
-            scorer = PodcastScorer(strategy=strategy)
+        scorer = PodcastScorer(strategy=strategy)
 
         episode = make_episode(transcript="A deep technical discussion about AI." * 50)
         # Set up the podcast relationship
@@ -86,8 +83,7 @@ class TestPodcastScorer:
         )
         strategy = _make_mock_strategy(return_value=mock_score)
 
-        with patch("app.services.podcast_scorer.Anthropic"):
-            scorer = PodcastScorer(strategy=strategy)
+        scorer = PodcastScorer(strategy=strategy)
 
         episode = make_episode(transcript="Content here. " * 50)
         mock_podcast = MagicMock()
@@ -105,8 +101,7 @@ class TestPodcastScorer:
         """When strategy.score() returns None, score_episode returns None."""
         strategy = _make_mock_strategy(return_value=None)
 
-        with patch("app.services.podcast_scorer.Anthropic"):
-            scorer = PodcastScorer(strategy=strategy)
+        scorer = PodcastScorer(strategy=strategy)
 
         episode = make_episode(transcript="Some transcript. " * 50)
         mock_podcast = MagicMock()
@@ -131,8 +126,7 @@ class TestPodcastScorer:
         )
         strategy = _make_mock_strategy(return_value=mock_score)
 
-        with patch("app.services.podcast_scorer.Anthropic"):
-            scorer = PodcastScorer(strategy=strategy)
+        scorer = PodcastScorer(strategy=strategy)
 
         episode = make_episode(transcript="Content here. " * 50)
         episode.podcast = None  # type: ignore[assignment]

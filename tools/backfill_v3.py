@@ -103,15 +103,10 @@ async def backfill(limit: int, dry_run: bool) -> None:
     """Score archived articles with v3-binary strategy."""
     from urllib.parse import urldefrag, urlparse, urlunparse
 
-    from anthropic import Anthropic
-
-    from app.config import get_settings
     from app.models.article import BinaryArticleScore, get_engine, get_session_factory
     from app.services.scoring_strategy import BinaryScoringStrategy
 
-    settings = get_settings()
-    anthropic_client = Anthropic(api_key=settings.anthropic_api_key)
-    strategy = BinaryScoringStrategy()
+    strategy = BinaryScoringStrategy(model_id="groq/qwen/qwen3-32b")
 
     # Load DB to find archived articles without v3 scores
     db_path = _PROJECT_ROOT / "reader_triage.db"
@@ -205,7 +200,6 @@ async def backfill(limit: int, dry_run: bool) -> None:
                 content=content,
                 word_count=word_count,
                 content_type_hint="article",
-                anthropic_client=anthropic_client,
                 entity_id=article_id,
             )
 

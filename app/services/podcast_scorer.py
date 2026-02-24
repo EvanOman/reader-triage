@@ -7,11 +7,9 @@ import logging
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from anthropic import Anthropic
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.config import get_settings
 from app.models.article import get_session_factory
 from app.models.podcast import PodcastEpisode, PodcastEpisodeScore
 from app.services.scorer import InfoScore
@@ -26,8 +24,6 @@ class PodcastScorer:
     """Scores podcast episodes by capture value using Claude."""
 
     def __init__(self, strategy: ScoringStrategy | None = None):
-        settings = get_settings()
-        self._anthropic = Anthropic(api_key=settings.anthropic_api_key)
         if strategy is not None:
             self._strategy = strategy
         else:
@@ -60,7 +56,6 @@ class PodcastScorer:
             content=episode.transcript,
             word_count=word_count,
             content_type_hint="podcast",
-            anthropic_client=self._anthropic,
             entity_id=str(episode.id),
         )
 
@@ -106,7 +101,6 @@ class PodcastScorer:
             content=transcript,
             word_count=word_count,
             content_type_hint="podcast",
-            anthropic_client=self._anthropic,
             entity_id=str(ep_info["id"]),
         )
 

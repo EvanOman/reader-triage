@@ -33,15 +33,10 @@ logger = logging.getLogger(__name__)
 
 async def score_inbox(limit: int, dry_run: bool) -> None:
     """Score non-archived articles with v3-binary strategy."""
-    from anthropic import Anthropic
-
-    from app.config import get_settings
     from app.models.article import Base, BinaryArticleScore, get_engine, get_session_factory
     from app.services.scoring_strategy import BinaryScoringStrategy
 
-    settings = get_settings()
-    anthropic_client = Anthropic(api_key=settings.anthropic_api_key)
-    strategy = BinaryScoringStrategy()
+    strategy = BinaryScoringStrategy(model_id="groq/qwen/qwen3-32b")
 
     db_path = _PROJECT_ROOT / "reader_triage.db"
     conn = sqlite3.connect(str(db_path))
@@ -157,7 +152,6 @@ async def score_inbox(limit: int, dry_run: bool) -> None:
                 content=content,
                 word_count=word_count,
                 content_type_hint="article",
-                anthropic_client=anthropic_client,
                 entity_id=article_id,
             )
 

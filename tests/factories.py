@@ -10,6 +10,22 @@ from app.models.podcast import PodcastEpisode
 from app.services.readwise import ReaderDocument
 
 
+def make_dspy_prediction(output_model_instance: object) -> MagicMock:
+    """Create a mock DSPy Prediction wrapping a Pydantic output model."""
+    prediction = MagicMock()
+    prediction.result = output_model_instance
+    return prediction
+
+
+def mock_lm_history(input_tokens: int = 500, output_tokens: int = 100) -> MagicMock:
+    """Create a mock DSPy LM with usage history."""
+    lm = MagicMock()
+    lm.history = [
+        {"response": {"usage": {"input_tokens": input_tokens, "output_tokens": output_tokens}}}
+    ]
+    return lm
+
+
 class FakeReadwiseService:
     """In-memory Readwise service for integration tests.
 
@@ -89,6 +105,7 @@ def make_document(
     location: str | None = "new",
     category: str | None = "article",
     site_name: str | None = "example.com",
+    source_url: str | None = None,
     reading_progress: float | None = 0.0,
     created_at: object = None,
     updated_at: object = None,
@@ -106,6 +123,7 @@ def make_document(
         location=location,
         category=category,
         site_name=site_name,
+        source_url=source_url,
         reading_progress=reading_progress,
         created_at=created_at,
         updated_at=updated_at,
