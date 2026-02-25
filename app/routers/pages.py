@@ -3,6 +3,8 @@
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
+from statistics import median
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -17,6 +19,7 @@ from app.models.article import (
     Author,
     BinaryArticleScore,
     Summary,
+    V4ArticleScore,
     get_session_factory,
 )
 from app.services.tagger import get_all_tags, get_tag_colors, get_tag_names, get_tag_styles
@@ -60,14 +63,17 @@ async def dashboard(request: Request):
         )
         total = total_result.scalar() or 0
 
-        # Get articles with both v2 and v3 scores
+        # Get articles with v2, v3, and v4 scores
         articles_query = (
-            select(Article, ArticleScore, BinaryArticleScore)
+            select(Article, ArticleScore, BinaryArticleScore, V4ArticleScore)
             .join(ArticleScore)
             .outerjoin(BinaryArticleScore)
+            .outerjoin(V4ArticleScore)
             .where(not_archived)
         )
-        if active_sort == "v3_score":
+        if active_sort == "v4_score":
+            articles_query = articles_query.order_by(V4ArticleScore.info_score.desc().nulls_last())
+        elif active_sort == "v3_score":
             articles_query = articles_query.order_by(
                 BinaryArticleScore.info_score.desc().nulls_last()
             )
@@ -93,7 +99,7 @@ async def dashboard(request: Request):
 
         # Build response
         articles = []
-        for article, score, v3_score in top_articles_rows:
+        for article, score, v3_score, v4_score in top_articles_rows:
             summary_result = await session.execute(
                 select(Summary).where(Summary.article_id == article.id)
             )
@@ -131,6 +137,12 @@ async def dashboard(request: Request):
                     "v3_depth_score": v3_score.depth_score if v3_score else None,
                     "v3_actionability_score": v3_score.actionability_score if v3_score else None,
                     "v3_overall_assessment": v3_score.overall_assessment if v3_score else None,
+                    "v4_info_score": v4_score.info_score if v4_score else None,
+                    "v4_specificity_score": v4_score.specificity_score if v4_score else None,
+                    "v4_novelty_score": v4_score.novelty_score if v4_score else None,
+                    "v4_depth_score": v4_score.depth_score if v4_score else None,
+                    "v4_actionability_score": v4_score.actionability_score if v4_score else None,
+                    "v4_overall_assessment": v4_score.overall_assessment if v4_score else None,
                 }
             )
 
@@ -193,6 +205,11 @@ async def article_detail(request: Request, article_id: str):
         )
         v3_score = v3_result.scalar_one_or_none()
 
+        v4_result = await session.execute(
+            select(V4ArticleScore).where(V4ArticleScore.article_id == article_id)
+        )
+        v4_score = v4_result.scalar_one_or_none()
+
         summary_result = await session.execute(
             select(Summary).where(Summary.article_id == article_id)
         )
@@ -223,6 +240,14 @@ async def article_detail(request: Request, article_id: str):
         if v3_score and v3_score.raw_responses:
             try:
                 v3_raw = json.loads(v3_score.raw_responses)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # Parse v4 raw responses for individual question display
+        v4_raw = None
+        if v4_score and v4_score.raw_responses:
+            try:
+                v4_raw = json.loads(v4_score.raw_responses)
             except (json.JSONDecodeError, TypeError):
                 pass
 
@@ -258,6 +283,13 @@ async def article_detail(request: Request, article_id: str):
             "v3_actionability_score": v3_score.actionability_score if v3_score else None,
             "v3_overall_assessment": v3_score.overall_assessment if v3_score else None,
             "v3_raw_responses": v3_raw,
+            "v4_info_score": v4_score.info_score if v4_score else None,
+            "v4_specificity_score": v4_score.specificity_score if v4_score else None,
+            "v4_novelty_score": v4_score.novelty_score if v4_score else None,
+            "v4_depth_score": v4_score.depth_score if v4_score else None,
+            "v4_actionability_score": v4_score.actionability_score if v4_score else None,
+            "v4_overall_assessment": v4_score.overall_assessment if v4_score else None,
+            "v4_raw_responses": v4_raw,
         }
 
     tag_names = get_tag_names()
@@ -399,5 +431,274 @@ async def usage_dashboard(request: Request):
             "daily_usage_json": json.dumps(daily_usage),
             "daily_by_service_json": json.dumps(daily_by_service),
             "by_service_json": json.dumps(by_service),
+        },
+    )
+
+
+def _histogram_bins(scores: list[float], bin_size: int = 10, max_val: int = 100) -> list[int]:
+    """Bucket scores into fixed-width bins."""
+    n_bins = max_val // bin_size
+    bins = [0] * n_bins
+    for s in scores:
+        idx = min(int(s // bin_size), n_bins - 1)
+        bins[idx] += 1
+    return bins
+
+
+def _score_stats(scores: list[float]) -> dict[str, Any]:
+    """Compute mean, median, count for a list of scores."""
+    if not scores:
+        return {"mean": 0, "median": 0, "count": 0}
+    return {
+        "mean": round(sum(scores) / len(scores), 1),
+        "median": round(median(scores), 1),
+        "count": len(scores),
+    }
+
+
+def _calibration_stats(items: list[dict[str, Any]]) -> dict[str, Any]:
+    """Compute Spearman rho and summary stats for calibration data."""
+    n = len(items)
+    with_hl = sum(1 for d in items if d["highlights"] > 0)
+    if n < 3:
+        return {"n": n, "with_hl": with_hl, "rho": None, "p": None}
+
+    from scipy.stats import spearmanr
+
+    scores = [d["score"] for d in items]
+    highlights = [d["highlights"] for d in items]
+    rho, p = spearmanr(scores, highlights)
+    return {
+        "n": n,
+        "with_hl": with_hl,
+        "rho": round(float(rho), 3),
+        "p": round(float(p), 4),
+    }
+
+
+@router.get("/analytics", response_class=HTMLResponse)
+async def analytics(request: Request):
+    """Render score distribution analytics page."""
+    # Exclude non-article categories (highlights, notes) from analytics
+    _article_categories = ("article", "tweet", "rss", "pdf")
+
+    factory = await get_session_factory()
+    async with factory() as session:
+        # V2 scores (articles only)
+        v2_result = await session.execute(
+            select(
+                ArticleScore.info_score,
+                ArticleScore.specificity_score,
+                ArticleScore.novelty_score,
+                ArticleScore.depth_score,
+                ArticleScore.actionability_score,
+            )
+            .join(Article, Article.id == ArticleScore.article_id)
+            .where(Article.category.in_(_article_categories))
+        )
+        v2_rows = v2_result.all()
+        v2_totals = [float(r[0]) for r in v2_rows]
+        v2_dims = {
+            "quotability": [int(r[1]) for r in v2_rows],
+            "surprise": [int(r[2]) for r in v2_rows],
+            "argument": [int(r[3]) for r in v2_rows],
+            "insight": [int(r[4]) for r in v2_rows],
+        }
+
+        # V3 scores (articles only)
+        v3_result = await session.execute(
+            select(
+                BinaryArticleScore.info_score,
+                BinaryArticleScore.specificity_score,
+                BinaryArticleScore.novelty_score,
+                BinaryArticleScore.depth_score,
+                BinaryArticleScore.actionability_score,
+            )
+            .join(Article, Article.id == BinaryArticleScore.article_id)
+            .where(Article.category.in_(_article_categories))
+        )
+        v3_rows = v3_result.all()
+        v3_totals = [float(r[0]) for r in v3_rows]
+        v3_dims = {
+            "quotability": [int(r[1]) for r in v3_rows],
+            "surprise": [int(r[2]) for r in v3_rows],
+            "argument": [int(r[3]) for r in v3_rows],
+            "insight": [int(r[4]) for r in v3_rows],
+        }
+
+        # V4 scores (articles only)
+        v4_result = await session.execute(
+            select(
+                V4ArticleScore.info_score,
+                V4ArticleScore.specificity_score,
+                V4ArticleScore.novelty_score,
+                V4ArticleScore.depth_score,
+                V4ArticleScore.actionability_score,
+            )
+            .join(Article, Article.id == V4ArticleScore.article_id)
+            .where(Article.category.in_(_article_categories))
+        )
+        v4_rows = v4_result.all()
+        v4_totals = [float(r[0]) for r in v4_rows]
+        v4_dims = {
+            "quotability": [int(r[1]) for r in v4_rows],
+            "surprise": [int(r[2]) for r in v4_rows],
+            "argument": [int(r[3]) for r in v4_rows],
+            "insight": [int(r[4]) for r in v4_rows],
+        }
+
+        # Paired scores: v2 vs v3, v2 vs v4
+        paired_v3_result = await session.execute(
+            select(
+                Article.title,
+                ArticleScore.info_score,
+                BinaryArticleScore.info_score,
+            )
+            .join(ArticleScore, Article.id == ArticleScore.article_id)
+            .join(BinaryArticleScore, Article.id == BinaryArticleScore.article_id)
+            .where(Article.category.in_(_article_categories))
+        )
+        paired_v3_rows = paired_v3_result.all()
+        scatter_v2_v3 = [
+            {"title": r[0], "v2": float(r[1]), "v3": float(r[2])} for r in paired_v3_rows
+        ]
+
+        paired_v4_result = await session.execute(
+            select(
+                Article.title,
+                ArticleScore.info_score,
+                V4ArticleScore.info_score,
+            )
+            .join(ArticleScore, Article.id == ArticleScore.article_id)
+            .join(V4ArticleScore, Article.id == V4ArticleScore.article_id)
+            .where(Article.category.in_(_article_categories))
+        )
+        paired_v4_rows = paired_v4_result.all()
+        scatter_v2_v4 = [
+            {"title": r[0], "v2": float(r[1]), "v4": float(r[2])} for r in paired_v4_rows
+        ]
+
+        # Calibration: articles with highlighted_words populated
+        cal_v2_result = await session.execute(
+            select(
+                Article.title,
+                ArticleScore.info_score,
+                Article.highlighted_words,
+                Article.word_count,
+            )
+            .join(ArticleScore, Article.id == ArticleScore.article_id)
+            .where(Article.highlighted_words.is_not(None))
+            .where(Article.category.in_(_article_categories))
+        )
+        cal_v2_rows = cal_v2_result.all()
+        cal_v2 = [
+            {
+                "title": r[0],
+                "score": float(r[1]),
+                "highlights": int(r[2]),
+                "density": round(int(r[2]) / int(r[3]) * 1000, 1) if r[3] and int(r[3]) > 0 else 0,
+            }
+            for r in cal_v2_rows
+        ]
+
+        cal_v3_result = await session.execute(
+            select(
+                Article.title,
+                BinaryArticleScore.info_score,
+                Article.highlighted_words,
+                Article.word_count,
+            )
+            .join(BinaryArticleScore, Article.id == BinaryArticleScore.article_id)
+            .where(Article.highlighted_words.is_not(None))
+            .where(Article.category.in_(_article_categories))
+        )
+        cal_v3_rows = cal_v3_result.all()
+        cal_v3 = [
+            {
+                "title": r[0],
+                "score": float(r[1]),
+                "highlights": int(r[2]),
+                "density": round(int(r[2]) / int(r[3]) * 1000, 1) if r[3] and int(r[3]) > 0 else 0,
+            }
+            for r in cal_v3_rows
+        ]
+
+        cal_v4_result = await session.execute(
+            select(
+                Article.title,
+                V4ArticleScore.info_score,
+                Article.highlighted_words,
+                Article.word_count,
+            )
+            .join(V4ArticleScore, Article.id == V4ArticleScore.article_id)
+            .where(Article.highlighted_words.is_not(None))
+            .where(Article.category.in_(_article_categories))
+        )
+        cal_v4_rows = cal_v4_result.all()
+        cal_v4 = [
+            {
+                "title": r[0],
+                "score": float(r[1]),
+                "highlights": int(r[2]),
+                "density": round(int(r[2]) / int(r[3]) * 1000, 1) if r[3] and int(r[3]) > 0 else 0,
+            }
+            for r in cal_v4_rows
+        ]
+
+    # Compute Spearman rho for calibration data (raw highlighted words)
+    cal_stats_v2 = _calibration_stats(cal_v2)
+    cal_stats_v3 = _calibration_stats(cal_v3)
+    cal_stats_v4 = _calibration_stats(cal_v4)
+
+    # Compute Spearman rho for density (highlighted words per 1k words)
+    density_stats_v2 = _calibration_stats(
+        [{"score": d["score"], "highlights": d["density"]} for d in cal_v2]
+    )
+    density_stats_v3 = _calibration_stats(
+        [{"score": d["score"], "highlights": d["density"]} for d in cal_v3]
+    )
+    density_stats_v4 = _calibration_stats(
+        [{"score": d["score"], "highlights": d["density"]} for d in cal_v4]
+    )
+
+    data = {
+        "v2_histogram": _histogram_bins(v2_totals),
+        "v3_histogram": _histogram_bins(v3_totals),
+        "v4_histogram": _histogram_bins(v4_totals),
+        "v2_stats": _score_stats(v2_totals),
+        "v3_stats": _score_stats(v3_totals),
+        "v4_stats": _score_stats(v4_totals),
+        "scatter_v2_v3": scatter_v2_v3,
+        "scatter_v2_v4": scatter_v2_v4,
+        "dimensions": {
+            dim: {
+                "v2": _histogram_bins([float(s) for s in v2_dims[dim]], bin_size=5, max_val=25),
+                "v3": _histogram_bins([float(s) for s in v3_dims[dim]], bin_size=5, max_val=25),
+                "v4": _histogram_bins([float(s) for s in v4_dims[dim]], bin_size=5, max_val=25),
+            }
+            for dim in ["quotability", "surprise", "argument", "insight"]
+        },
+        "cal_v2": cal_v2,
+        "cal_v3": cal_v3,
+        "cal_v4": cal_v4,
+        "cal_stats_v2": cal_stats_v2,
+        "cal_stats_v3": cal_stats_v3,
+        "cal_stats_v4": cal_stats_v4,
+    }
+
+    return templates.TemplateResponse(
+        "analytics.html",
+        {
+            "request": request,
+            "data_json": json.dumps(data),
+            "v2_stats": data["v2_stats"],
+            "v3_stats": data["v3_stats"],
+            "v4_stats": data["v4_stats"],
+            "cal_stats_v2": cal_stats_v2,
+            "cal_stats_v3": cal_stats_v3,
+            "cal_stats_v4": cal_stats_v4,
+            "density_stats_v2": density_stats_v2,
+            "density_stats_v3": density_stats_v3,
+            "density_stats_v4": density_stats_v4,
         },
     )

@@ -1,0 +1,544 @@
+{% extends "base.html" %}
+
+{% block title %}Score Analytics - Reader Triage{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <h1 class="text-lg font-semibold text-white tracking-tight fade-in">Score Analytics</h1>
+
+    <!-- Section A: Score Histograms -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 fade-in fade-in-delay-1">
+        <!-- V2 Histogram -->
+        <div class="bg-dark-card rounded-lg p-5 border border-dark-border">
+            <div class="flex items-baseline justify-between mb-4">
+                <h2 class="text-xs font-medium uppercase tracking-widest text-gray-500">V2 Categorical</h2>
+                <div class="flex gap-3 text-[11px] text-gray-500 tabular-nums">
+                    <span>n={{ v2_stats.count }}</span>
+                    <span>mean={{ v2_stats.mean }}</span>
+                    <span>med={{ v2_stats.median }}</span>
+                </div>
+            </div>
+            <div class="h-48">
+                <canvas id="v2-histogram"></canvas>
+            </div>
+        </div>
+        <!-- V3 Histogram -->
+        <div class="bg-dark-card rounded-lg p-5 border border-dark-border">
+            <div class="flex items-baseline justify-between mb-4">
+                <h2 class="text-xs font-medium uppercase tracking-widest text-gray-500">V3 Binary</h2>
+                <div class="flex gap-3 text-[11px] text-gray-500 tabular-nums">
+                    <span>n={{ v3_stats.count }}</span>
+                    <span>mean={{ v3_stats.mean }}</span>
+                    <span>med={{ v3_stats.median }}</span>
+                </div>
+            </div>
+            <div class="h-48">
+                <canvas id="v3-histogram"></canvas>
+            </div>
+        </div>
+        <!-- V4 Histogram -->
+        <div class="bg-dark-card rounded-lg p-5 border border-dark-border">
+            <div class="flex items-baseline justify-between mb-4">
+                <h2 class="text-xs font-medium uppercase tracking-widest text-gray-500">V4 Tiered</h2>
+                <div class="flex gap-3 text-[11px] text-gray-500 tabular-nums">
+                    <span>n={{ v4_stats.count }}</span>
+                    <span>mean={{ v4_stats.mean }}</span>
+                    <span>med={{ v4_stats.median }}</span>
+                </div>
+            </div>
+            <div class="h-48">
+                <canvas id="v4-histogram"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- Section B: Scatter Plots -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 fade-in fade-in-delay-2">
+        <div class="bg-dark-card rounded-lg p-5 border border-dark-border">
+            <h2 class="text-xs font-medium uppercase tracking-widest text-gray-500 mb-4">V2 vs V3 Score Comparison</h2>
+            <div class="h-72">
+                <canvas id="scatter-v2-v3"></canvas>
+            </div>
+        </div>
+        <div class="bg-dark-card rounded-lg p-5 border border-dark-border">
+            <h2 class="text-xs font-medium uppercase tracking-widest text-gray-500 mb-4">V2 vs V4 Score Comparison</h2>
+            <div class="h-72">
+                <canvas id="scatter-v2-v4"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- Section C: Dimension Comparison -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 fade-in fade-in-delay-3">
+        <div class="bg-dark-card rounded-lg p-5 border border-dark-border">
+            <h2 class="text-xs font-medium uppercase tracking-widest text-gray-500 mb-4">Quotability</h2>
+            <div class="h-40">
+                <canvas id="dim-quotability"></canvas>
+            </div>
+        </div>
+        <div class="bg-dark-card rounded-lg p-5 border border-dark-border">
+            <h2 class="text-xs font-medium uppercase tracking-widest text-gray-500 mb-4">Surprise Factor</h2>
+            <div class="h-40">
+                <canvas id="dim-surprise"></canvas>
+            </div>
+        </div>
+        <div class="bg-dark-card rounded-lg p-5 border border-dark-border">
+            <h2 class="text-xs font-medium uppercase tracking-widest text-gray-500 mb-4">Argument Quality</h2>
+            <div class="h-40">
+                <canvas id="dim-argument"></canvas>
+            </div>
+        </div>
+        <div class="bg-dark-card rounded-lg p-5 border border-dark-border">
+            <h2 class="text-xs font-medium uppercase tracking-widest text-gray-500 mb-4">Applicable Insight</h2>
+            <div class="h-40">
+                <canvas id="dim-insight"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- Section D: Calibration — Score vs Highlights (Raw) -->
+    <div class="fade-in fade-in-delay-3">
+        <div class="flex items-center gap-4 mb-3">
+            <h2 class="text-xs font-medium uppercase tracking-widest text-gray-500">Calibration: Score vs Highlighted Words (Raw)</h2>
+            <label class="flex items-center gap-1.5 text-[11px] text-gray-500 cursor-pointer select-none">
+                <input type="checkbox" id="cal-show-zero" checked
+                    class="rounded border-gray-600 bg-dark-card text-indigo-500 focus:ring-indigo-500 focus:ring-offset-0 h-3 w-3">
+                Show zero-highlight
+            </label>
+        </div>
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
+            <div class="bg-dark-card rounded-lg p-5 border border-dark-border">
+                <div class="flex items-baseline justify-between mb-4">
+                    <h3 class="text-xs font-medium uppercase tracking-widest text-gray-500">V2 Categorical</h3>
+                    <div class="flex gap-3 text-[11px] text-gray-500 tabular-nums">
+                        <span>n={{ cal_stats_v2.n }}</span>
+                        {% if cal_stats_v2.rho is not none %}<span>rho={{ cal_stats_v2.rho }}</span>{% endif %}
+                        <span>{{ cal_stats_v2.with_hl }} highlighted</span>
+                    </div>
+                </div>
+                <div class="h-64">
+                    <canvas id="cal-v2"></canvas>
+                </div>
+            </div>
+            <div class="bg-dark-card rounded-lg p-5 border border-dark-border">
+                <div class="flex items-baseline justify-between mb-4">
+                    <h3 class="text-xs font-medium uppercase tracking-widest text-gray-500">V3 Binary</h3>
+                    <div class="flex gap-3 text-[11px] text-gray-500 tabular-nums">
+                        <span>n={{ cal_stats_v3.n }}</span>
+                        {% if cal_stats_v3.rho is not none %}<span>rho={{ cal_stats_v3.rho }}</span>{% endif %}
+                        <span>{{ cal_stats_v3.with_hl }} highlighted</span>
+                    </div>
+                </div>
+                <div class="h-64">
+                    <canvas id="cal-v3"></canvas>
+                </div>
+            </div>
+            <div class="bg-dark-card rounded-lg p-5 border border-dark-border">
+                <div class="flex items-baseline justify-between mb-4">
+                    <h3 class="text-xs font-medium uppercase tracking-widest text-gray-500">V4 Tiered</h3>
+                    <div class="flex gap-3 text-[11px] text-gray-500 tabular-nums">
+                        <span>n={{ cal_stats_v4.n }}</span>
+                        {% if cal_stats_v4.rho is not none %}<span>rho={{ cal_stats_v4.rho }}</span>{% endif %}
+                        <span>{{ cal_stats_v4.with_hl }} highlighted</span>
+                    </div>
+                </div>
+                <div class="h-64">
+                    <canvas id="cal-v4"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Section E: Calibration — Highlight Density (length-normalized) -->
+    <div class="fade-in fade-in-delay-3">
+        <div class="flex items-center gap-4 mb-3">
+            <h2 class="text-xs font-medium uppercase tracking-widest text-gray-500">Calibration: Score vs Highlight Density (per 1k words)</h2>
+            <label class="flex items-center gap-1.5 text-[11px] text-gray-500 cursor-pointer select-none">
+                <input type="checkbox" id="density-show-zero" checked
+                    class="rounded border-gray-600 bg-dark-card text-indigo-500 focus:ring-indigo-500 focus:ring-offset-0 h-3 w-3">
+                Show zero-highlight
+            </label>
+        </div>
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
+            <div class="bg-dark-card rounded-lg p-5 border border-dark-border">
+                <div class="flex items-baseline justify-between mb-4">
+                    <h3 class="text-xs font-medium uppercase tracking-widest text-gray-500">V2 Categorical</h3>
+                    <div class="flex gap-3 text-[11px] text-gray-500 tabular-nums">
+                        <span>n={{ density_stats_v2.n }}</span>
+                        {% if density_stats_v2.rho is not none %}<span>rho={{ density_stats_v2.rho }}</span>{% endif %}
+                        <span>{{ density_stats_v2.with_hl }} highlighted</span>
+                    </div>
+                </div>
+                <div class="h-64">
+                    <canvas id="density-v2"></canvas>
+                </div>
+            </div>
+            <div class="bg-dark-card rounded-lg p-5 border border-dark-border">
+                <div class="flex items-baseline justify-between mb-4">
+                    <h3 class="text-xs font-medium uppercase tracking-widest text-gray-500">V3 Binary</h3>
+                    <div class="flex gap-3 text-[11px] text-gray-500 tabular-nums">
+                        <span>n={{ density_stats_v3.n }}</span>
+                        {% if density_stats_v3.rho is not none %}<span>rho={{ density_stats_v3.rho }}</span>{% endif %}
+                        <span>{{ density_stats_v3.with_hl }} highlighted</span>
+                    </div>
+                </div>
+                <div class="h-64">
+                    <canvas id="density-v3"></canvas>
+                </div>
+            </div>
+            <div class="bg-dark-card rounded-lg p-5 border border-dark-border">
+                <div class="flex items-baseline justify-between mb-4">
+                    <h3 class="text-xs font-medium uppercase tracking-widest text-gray-500">V4 Tiered</h3>
+                    <div class="flex gap-3 text-[11px] text-gray-500 tabular-nums">
+                        <span>n={{ density_stats_v4.n }}</span>
+                        {% if density_stats_v4.rho is not none %}<span>rho={{ density_stats_v4.rho }}</span>{% endif %}
+                        <span>{{ density_stats_v4.with_hl }} highlighted</span>
+                    </div>
+                </div>
+                <div class="h-64">
+                    <canvas id="density-v4"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script>
+    const data = {{ data_json|safe }};
+    const binLabels = ['0-9','10-19','20-29','30-39','40-49','50-59','60-69','70-79','80-89','90-100'];
+
+    Chart.defaults.color = '#6b7280';
+    Chart.defaults.borderColor = 'rgba(45,47,61,0.5)';
+    Chart.defaults.font.family = "'Inter', system-ui, sans-serif";
+    Chart.defaults.font.size = 11;
+
+    const v2Color = { bg: 'rgba(124,107,245,0.6)', border: 'rgba(124,107,245,0.8)' };
+    const v3Color = { bg: 'rgba(59,130,246,0.6)', border: 'rgba(59,130,246,0.8)' };
+    const v4Color = { bg: 'rgba(16,185,129,0.6)', border: 'rgba(16,185,129,0.8)' };
+
+    // --- Histograms ---
+    function makeHistogram(canvasId, bins, color) {
+        new Chart(document.getElementById(canvasId), {
+            type: 'bar',
+            data: {
+                labels: binLabels,
+                datasets: [{
+                    data: bins,
+                    backgroundColor: color.bg,
+                    borderColor: color.border,
+                    borderWidth: 1,
+                    borderRadius: 2,
+                }],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { grid: { display: false } },
+                    y: {
+                        beginAtZero: true,
+                        ticks: { stepSize: 1, precision: 0 },
+                        grid: { color: 'rgba(45,47,61,0.3)' },
+                    },
+                },
+            },
+        });
+    }
+    makeHistogram('v2-histogram', data.v2_histogram, v2Color);
+    makeHistogram('v3-histogram', data.v3_histogram, v3Color);
+    makeHistogram('v4-histogram', data.v4_histogram, v4Color);
+
+    // --- Scatter Plots ---
+    function makeScatter(canvasId, points, yLabel, yKey) {
+        const pts = points.map(d => ({ x: d.v2, y: d[yKey], title: d.title }));
+
+        new Chart(document.getElementById(canvasId), {
+            type: 'scatter',
+            data: {
+                datasets: [
+                    {
+                        label: 'Articles',
+                        data: pts,
+                        backgroundColor: 'rgba(124,107,245,0.5)',
+                        borderColor: 'rgba(124,107,245,0.8)',
+                        borderWidth: 1,
+                        pointRadius: 4,
+                        pointHoverRadius: 6,
+                    },
+                    {
+                        label: 'y = x',
+                        data: [{x: 0, y: 0}, {x: 100, y: 100}],
+                        type: 'line',
+                        borderColor: 'rgba(107,114,128,0.4)',
+                        borderWidth: 1,
+                        borderDash: [4, 4],
+                        pointRadius: 0,
+                        fill: false,
+                    },
+                ],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: function(ctx) {
+                                if (ctx.datasetIndex === 1) return '';
+                                const p = ctx.raw;
+                                const title = p.title && p.title.length > 60
+                                    ? p.title.substring(0, 57) + '...'
+                                    : p.title;
+                                return `${title} (v2: ${p.x}, ${yLabel}: ${p.y})`;
+                            },
+                        },
+                    },
+                },
+                scales: {
+                    x: {
+                        title: { display: true, text: 'V2 Score', color: '#6b7280' },
+                        min: 0, max: 100,
+                        grid: { color: 'rgba(45,47,61,0.3)' },
+                    },
+                    y: {
+                        title: { display: true, text: yLabel + ' Score', color: '#6b7280' },
+                        min: 0, max: 100,
+                        grid: { color: 'rgba(45,47,61,0.3)' },
+                    },
+                },
+            },
+        });
+    }
+    makeScatter('scatter-v2-v3', data.scatter_v2_v3, 'V3', 'v3');
+    makeScatter('scatter-v2-v4', data.scatter_v2_v4, 'V4', 'v4');
+
+    // --- Dimension Comparison ---
+    const dimBinLabels = ['0-4','5-9','10-14','15-19','20-25'];
+
+    function makeDimChart(canvasId, dimKey) {
+        const dim = data.dimensions[dimKey];
+        new Chart(document.getElementById(canvasId), {
+            type: 'bar',
+            data: {
+                labels: dimBinLabels,
+                datasets: [
+                    {
+                        label: 'V2',
+                        data: dim.v2,
+                        backgroundColor: v2Color.bg,
+                        borderColor: v2Color.border,
+                        borderWidth: 1,
+                        borderRadius: 2,
+                    },
+                    {
+                        label: 'V3',
+                        data: dim.v3,
+                        backgroundColor: v3Color.bg,
+                        borderColor: v3Color.border,
+                        borderWidth: 1,
+                        borderRadius: 2,
+                    },
+                    {
+                        label: 'V4',
+                        data: dim.v4,
+                        backgroundColor: v4Color.bg,
+                        borderColor: v4Color.border,
+                        borderWidth: 1,
+                        borderRadius: 2,
+                    },
+                ],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'top',
+                        labels: { boxWidth: 8, padding: 12, font: { size: 10 } },
+                    },
+                },
+                scales: {
+                    x: { grid: { display: false } },
+                    y: {
+                        beginAtZero: true,
+                        ticks: { stepSize: 1, precision: 0 },
+                        grid: { color: 'rgba(45,47,61,0.3)' },
+                    },
+                },
+            },
+        });
+    }
+    makeDimChart('dim-quotability', 'quotability');
+    makeDimChart('dim-surprise', 'surprise');
+    makeDimChart('dim-argument', 'argument');
+    makeDimChart('dim-insight', 'insight');
+
+    // --- Section D: Calibration Scatter ---
+    const greenColor = { bg: 'rgba(34,197,94,0.6)', border: 'rgba(34,197,94,0.8)' };
+    const grayColor  = { bg: 'rgba(107,114,128,0.3)', border: 'rgba(107,114,128,0.5)' };
+
+    function makeCalChart(canvasId, items) {
+        const withHl = items.filter(d => d.highlights > 0).map(d => ({ x: d.score, y: d.highlights, title: d.title }));
+        const noHl   = items.filter(d => d.highlights === 0).map(d => ({ x: d.score, y: 0, title: d.title }));
+
+        const chart = new Chart(document.getElementById(canvasId), {
+            type: 'scatter',
+            data: {
+                datasets: [
+                    {
+                        label: 'With highlights',
+                        data: withHl,
+                        backgroundColor: greenColor.bg,
+                        borderColor: greenColor.border,
+                        borderWidth: 1,
+                        pointRadius: 5,
+                        pointHoverRadius: 7,
+                    },
+                    {
+                        label: 'No highlights',
+                        data: noHl,
+                        backgroundColor: grayColor.bg,
+                        borderColor: grayColor.border,
+                        borderWidth: 1,
+                        pointRadius: 3,
+                        pointHoverRadius: 5,
+                    },
+                ],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'top',
+                        labels: { boxWidth: 8, padding: 12, font: { size: 10 } },
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(ctx) {
+                                const p = ctx.raw;
+                                const title = p.title && p.title.length > 50
+                                    ? p.title.substring(0, 47) + '...'
+                                    : p.title;
+                                return `${title} (score: ${p.x}, words: ${p.y})`;
+                            },
+                        },
+                    },
+                },
+                scales: {
+                    x: {
+                        title: { display: true, text: 'Score', color: '#6b7280' },
+                        min: 0, max: 100,
+                        grid: { color: 'rgba(45,47,61,0.3)' },
+                    },
+                    y: {
+                        title: { display: true, text: 'Highlighted Words', color: '#6b7280' },
+                        beginAtZero: true,
+                        grid: { color: 'rgba(45,47,61,0.3)' },
+                    },
+                },
+            },
+        });
+        return chart;
+    }
+
+    const calV2Chart = makeCalChart('cal-v2', data.cal_v2);
+    const calV3Chart = makeCalChart('cal-v3', data.cal_v3);
+    const calV4Chart = makeCalChart('cal-v4', data.cal_v4);
+
+    // Toggle zero-highlight points (raw)
+    document.getElementById('cal-show-zero').addEventListener('change', function() {
+        const visible = this.checked;
+        calV2Chart.data.datasets[1].hidden = !visible;
+        calV3Chart.data.datasets[1].hidden = !visible;
+        calV4Chart.data.datasets[1].hidden = !visible;
+        calV2Chart.update();
+        calV3Chart.update();
+        calV4Chart.update();
+    });
+
+    // --- Section E: Highlight Density Scatter ---
+    function makeDensityChart(canvasId, items) {
+        const withHl = items.filter(d => d.density > 0).map(d => ({ x: d.score, y: d.density, title: d.title }));
+        const noHl   = items.filter(d => d.density === 0).map(d => ({ x: d.score, y: 0, title: d.title }));
+
+        const chart = new Chart(document.getElementById(canvasId), {
+            type: 'scatter',
+            data: {
+                datasets: [
+                    {
+                        label: 'With highlights',
+                        data: withHl,
+                        backgroundColor: greenColor.bg,
+                        borderColor: greenColor.border,
+                        borderWidth: 1,
+                        pointRadius: 5,
+                        pointHoverRadius: 7,
+                    },
+                    {
+                        label: 'No highlights',
+                        data: noHl,
+                        backgroundColor: grayColor.bg,
+                        borderColor: grayColor.border,
+                        borderWidth: 1,
+                        pointRadius: 3,
+                        pointHoverRadius: 5,
+                    },
+                ],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'top',
+                        labels: { boxWidth: 8, padding: 12, font: { size: 10 } },
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(ctx) {
+                                const p = ctx.raw;
+                                const title = p.title && p.title.length > 50
+                                    ? p.title.substring(0, 47) + '...'
+                                    : p.title;
+                                return `${title} (score: ${p.x}, density: ${p.y}/1k words)`;
+                            },
+                        },
+                    },
+                },
+                scales: {
+                    x: {
+                        title: { display: true, text: 'Score', color: '#6b7280' },
+                        min: 0, max: 100,
+                        grid: { color: 'rgba(45,47,61,0.3)' },
+                    },
+                    y: {
+                        title: { display: true, text: 'Highlighted Words / 1k Words', color: '#6b7280' },
+                        beginAtZero: true,
+                        grid: { color: 'rgba(45,47,61,0.3)' },
+                    },
+                },
+            },
+        });
+        return chart;
+    }
+
+    const densityV2Chart = makeDensityChart('density-v2', data.cal_v2);
+    const densityV3Chart = makeDensityChart('density-v3', data.cal_v3);
+    const densityV4Chart = makeDensityChart('density-v4', data.cal_v4);
+
+    // Toggle zero-highlight points (density)
+    document.getElementById('density-show-zero').addEventListener('change', function() {
+        const visible = this.checked;
+        densityV2Chart.data.datasets[1].hidden = !visible;
+        densityV3Chart.data.datasets[1].hidden = !visible;
+        densityV4Chart.data.datasets[1].hidden = !visible;
+        densityV2Chart.update();
+        densityV3Chart.update();
+        densityV4Chart.update();
+    });
+</script>
+{% endblock %}
