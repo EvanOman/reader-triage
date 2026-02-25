@@ -14,6 +14,7 @@ from app.models.article import (
     Author,
     BinaryArticleScore,
     Summary,
+    V4ArticleScore,
     get_session_factory,
     search_articles_fts,
 )
@@ -57,6 +58,13 @@ class ArticleResponse(BaseModel):
     v3_depth_score: int | None = None
     v3_actionability_score: int | None = None
     v3_overall_assessment: str | None = None
+    # v4-binary scores (optional, None if not yet scored)
+    v4_info_score: float | None = None
+    v4_specificity_score: int | None = None
+    v4_novelty_score: int | None = None
+    v4_depth_score: int | None = None
+    v4_actionability_score: int | None = None
+    v4_overall_assessment: str | None = None
 
 
 class ArticleDetailResponse(ArticleResponse):
@@ -117,6 +125,7 @@ async def _article_to_response(
     has_summary: bool = False,
     tags: list[str] | None = None,
     v3_score: BinaryArticleScore | None = None,
+    v4_score: V4ArticleScore | None = None,
 ) -> ArticleResponse:
     """Convert Article and ArticleScore to API response."""
     v3_info_score = v3_score.info_score if v3_score else None
@@ -125,6 +134,13 @@ async def _article_to_response(
     v3_depth_score = v3_score.depth_score if v3_score else None
     v3_actionability_score = v3_score.actionability_score if v3_score else None
     v3_overall_assessment = v3_score.overall_assessment if v3_score else None
+
+    v4_info_score = v4_score.info_score if v4_score else None
+    v4_specificity_score = v4_score.specificity_score if v4_score else None
+    v4_novelty_score = v4_score.novelty_score if v4_score else None
+    v4_depth_score = v4_score.depth_score if v4_score else None
+    v4_actionability_score = v4_score.actionability_score if v4_score else None
+    v4_overall_assessment = v4_score.overall_assessment if v4_score else None
 
     if score is None:
         return ArticleResponse(
@@ -156,6 +172,12 @@ async def _article_to_response(
             v3_depth_score=v3_depth_score,
             v3_actionability_score=v3_actionability_score,
             v3_overall_assessment=v3_overall_assessment,
+            v4_info_score=v4_info_score,
+            v4_specificity_score=v4_specificity_score,
+            v4_novelty_score=v4_novelty_score,
+            v4_depth_score=v4_depth_score,
+            v4_actionability_score=v4_actionability_score,
+            v4_overall_assessment=v4_overall_assessment,
         )
 
     return ArticleResponse(
@@ -187,6 +209,12 @@ async def _article_to_response(
         v3_depth_score=v3_depth_score,
         v3_actionability_score=v3_actionability_score,
         v3_overall_assessment=v3_overall_assessment,
+        v4_info_score=v4_info_score,
+        v4_specificity_score=v4_specificity_score,
+        v4_novelty_score=v4_novelty_score,
+        v4_depth_score=v4_depth_score,
+        v4_actionability_score=v4_actionability_score,
+        v4_overall_assessment=v4_overall_assessment,
     )
 
 
@@ -204,9 +232,10 @@ async def get_top5():
     factory = await get_session_factory()
     async with factory() as session:
         result = await session.execute(
-            select(Article, ArticleScore, BinaryArticleScore)
+            select(Article, ArticleScore, BinaryArticleScore, V4ArticleScore)
             .join(ArticleScore)
             .outerjoin(BinaryArticleScore)
+            .outerjoin(V4ArticleScore)
             .where(Article.location != "archive")
             .order_by(ArticleScore.info_score.desc(), ArticleScore.priority_score.desc())
             .limit(5)
@@ -214,14 +243,14 @@ async def get_top5():
         rows = result.all()
 
         responses = []
-        for article, score, v3_score in rows:
+        for article, score, v3_score, v4_score in rows:
             summary_result = await session.execute(
                 select(Summary).where(Summary.article_id == article.id)
             )
             has_summary = summary_result.scalar_one_or_none() is not None
             tags = await _get_article_tags(session, article.id)
             responses.append(
-                await _article_to_response(article, score, has_summary, tags, v3_score)
+                await _article_to_response(article, score, has_summary, tags, v3_score, v4_score)
             )
 
     return responses
@@ -253,11 +282,14 @@ async def list_articles(
                 return []  # No FTS matches
 
         query = (
-            select(Article, ArticleScore, BinaryArticleScore)
+            select(Article, ArticleScore, BinaryArticleScore, V4ArticleScore)
             .join(ArticleScore)
             .outerjoin(BinaryArticleScore)
+            .outerjoin(V4ArticleScore)
         )
-        if sort == "v3_score":
+        if sort == "v4_score":
+            query = query.order_by(V4ArticleScore.info_score.desc().nulls_last())
+        elif sort == "v3_score":
             query = query.order_by(BinaryArticleScore.info_score.desc().nulls_last())
         elif sort == "added":
             query = query.order_by(Article.readwise_created_at.desc().nulls_last())
@@ -291,14 +323,14 @@ async def list_articles(
         rows = result.all()
 
         responses = []
-        for article, score, v3_score in rows:
+        for article, score, v3_score, v4_score in rows:
             summary_result = await session.execute(
                 select(Summary).where(Summary.article_id == article.id)
             )
             has_summary = summary_result.scalar_one_or_none() is not None
             tags = await _get_article_tags(session, article.id)
             responses.append(
-                await _article_to_response(article, score, has_summary, tags, v3_score)
+                await _article_to_response(article, score, has_summary, tags, v3_score, v4_score)
             )
 
     return responses
@@ -310,9 +342,10 @@ async def get_skip_recommended():
     factory = await get_session_factory()
     async with factory() as session:
         result = await session.execute(
-            select(Article, ArticleScore, BinaryArticleScore)
+            select(Article, ArticleScore, BinaryArticleScore, V4ArticleScore)
             .join(ArticleScore)
             .outerjoin(BinaryArticleScore)
+            .outerjoin(V4ArticleScore)
             .where(ArticleScore.skip_recommended == True)  # noqa: E712
             .where(Article.location != "archive")
             .order_by(ArticleScore.info_score.asc())
@@ -320,14 +353,14 @@ async def get_skip_recommended():
         rows = result.all()
 
         responses = []
-        for article, score, v3_score in rows:
+        for article, score, v3_score, v4_score in rows:
             summary_result = await session.execute(
                 select(Summary).where(Summary.article_id == article.id)
             )
             has_summary = summary_result.scalar_one_or_none() is not None
             tags = await _get_article_tags(session, article.id)
             responses.append(
-                await _article_to_response(article, score, has_summary, tags, v3_score)
+                await _article_to_response(article, score, has_summary, tags, v3_score, v4_score)
             )
 
     return responses
@@ -352,13 +385,20 @@ async def get_article(article_id: str):
         )
         v3_score = v3_result.scalar_one_or_none()
 
+        v4_result = await session.execute(
+            select(V4ArticleScore).where(V4ArticleScore.article_id == article_id)
+        )
+        v4_score = v4_result.scalar_one_or_none()
+
         summary_result = await session.execute(
             select(Summary).where(Summary.article_id == article_id)
         )
         summary = summary_result.scalar_one_or_none()
 
         tags = await _get_article_tags(session, article.id)
-        base = await _article_to_response(article, score, summary is not None, tags, v3_score)
+        base = await _article_to_response(
+            article, score, summary is not None, tags, v3_score, v4_score
+        )
 
         return ArticleDetailResponse(
             **base.model_dump(),

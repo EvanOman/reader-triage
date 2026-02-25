@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from readwise_sdk import AsyncReadwiseClient
-from readwise_sdk.v3.models import Document
+from readwise_sdk.v3.models import Document, DocumentLocation
 
 from app.config import get_settings
 
@@ -23,6 +23,7 @@ class ReaderDocument:
     location: str | None  # new, later, archive
     category: str | None  # article, email, rss, etc.
     site_name: str | None
+    source_url: str | None
     reading_progress: float | None
     created_at: datetime | None
     updated_at: datetime | None
@@ -41,13 +42,25 @@ class ReadwiseService:
         limit: int = 200,
         with_content: bool = False,
         exclude_archived: bool = True,
+        location: DocumentLocation | None = None,
     ) -> list[ReaderDocument]:
-        """Fetch all documents (inbox + later, optionally archive)."""
+        """Fetch all documents (inbox + later, optionally archive).
+
+        When ``location`` is set the server-side filter is used and the
+        client-side ``exclude_archived`` check is skipped.
+        """
         documents: list[ReaderDocument] = []
         count = 0
 
-        async for doc in self._client.v3.list_documents(with_content=with_content):
-            if exclude_archived and doc.location and doc.location.value == "archive":
+        async for doc in self._client.v3.list_documents(
+            with_content=with_content, location=location
+        ):
+            if (
+                location is None
+                and exclude_archived
+                and doc.location
+                and doc.location.value == "archive"
+            ):
                 continue
 
             documents.append(self._to_reader_document(doc))
@@ -56,6 +69,14 @@ class ReadwiseService:
                 break
 
         return documents
+
+    async def get_archived_documents(
+        self, limit: int = 500, with_content: bool = False
+    ) -> list[ReaderDocument]:
+        """Fetch archived documents only."""
+        return await self.get_all_documents(
+            limit=limit, with_content=with_content, location=DocumentLocation.ARCHIVE
+        )
 
     async def get_inbox_documents(
         self, limit: int = 50, with_content: bool = True
@@ -95,6 +116,7 @@ class ReadwiseService:
             location=doc.location.value if doc.location else None,
             category=doc.category.value if doc.category else None,
             site_name=doc.site_name,
+            source_url=doc.source_url,
             reading_progress=doc.reading_progress,
             created_at=doc.created_at,
             updated_at=doc.updated_at,

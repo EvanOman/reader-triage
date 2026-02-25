@@ -133,16 +133,17 @@ def load_tags_from_db(db_path: str = "reader_triage.db") -> dict[str, list[str]]
 def fetch_highlights(
     cache_path: str | Path = _DEFAULT_CACHE,
     force: bool = False,
-) -> dict[str, int]:
-    """Fetch highlight counts from Readwise for all articles in the DB.
+) -> dict[str, dict[str, int]]:
+    """Fetch highlight data from Readwise for all articles in the DB.
 
-    Uses Readwise v2 export API to get highlight counts per URL, then
+    Uses Readwise v2 export API to get highlight text per URL, then
     matches to DB articles by normalized URL.
 
     Caches results in cache_path. If cache exists and is < 1 hour old,
     returns cached data unless force=True.
 
-    Returns {article_id: num_highlights}
+    Returns {article_id: {"count": N, "words": W}} where words is the
+    total word count across all highlights for that article.
     """
     cache_path = Path(cache_path)
 
@@ -165,17 +166,22 @@ def fetch_highlights(
 
     client = ReadwiseClient(api_key=token)
 
-    # Step 1: Load all article URLs from the DB
-    df = load_scores_from_db()
+    # Step 1: Load all article URLs from the DB (use articles table directly
+    # so that recently synced articles without scores are also covered)
+    resolved = Path(_DEFAULT_DB)
+    conn = sqlite3.connect(str(resolved))
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute("SELECT id, url FROM articles").fetchall()
+    conn.close()
     db_url_to_id: dict[str, str] = {}
-    for _, row in df.iterrows():
+    for row in rows:
         norm = _normalize_url(row["url"])
         if norm:
-            db_url_to_id[norm] = row["article_id"]
+            db_url_to_id[norm] = row["id"]
 
     # Step 2: Fetch all books with highlights from v2 export (manual pagination)
     print("Fetching highlight exports from Readwise v2 API...")
-    url_to_highlight_count: dict[str, int] = {}
+    url_to_hl_data: dict[str, dict[str, int]] = {}
     api_url = f"{READWISE_API_V2_BASE}/export/"
     params: dict = {}
     book_count = 0
@@ -189,12 +195,16 @@ def fetch_highlights(
             book = ExportBook.model_validate(item)
             book_count += 1
             num_hl = len(book.highlights)
+            total_words = sum(len(hl.text.split()) for hl in book.highlights if hl.text)
 
             for candidate_url in [book.source_url, book.unique_url]:
                 norm = _normalize_url(candidate_url)
                 if norm:
-                    # Keep the max highlight count if URL appears multiple times
-                    url_to_highlight_count[norm] = max(url_to_highlight_count.get(norm, 0), num_hl)
+                    existing = url_to_hl_data.get(norm, {"count": 0, "words": 0})
+                    url_to_hl_data[norm] = {
+                        "count": max(existing["count"], num_hl),
+                        "words": max(existing["words"], total_words),
+                    }
 
         if book_count % 100 == 0:
             print(f"  Processed {book_count} books...")
@@ -206,13 +216,13 @@ def fetch_highlights(
 
     print(f"  Total books processed: {book_count}")
 
-    # Step 3: Match DB articles to highlight counts
-    result: dict[str, int] = {}
+    # Step 3: Match DB articles to highlight data
+    result: dict[str, dict[str, int]] = {}
     matched = 0
     for norm_url, article_id in db_url_to_id.items():
-        hl_count = url_to_highlight_count.get(norm_url, 0)
-        result[article_id] = hl_count
-        if hl_count > 0:
+        hl_data = url_to_hl_data.get(norm_url, {"count": 0, "words": 0})
+        result[article_id] = hl_data
+        if hl_data["count"] > 0:
             matched += 1
 
     print(f"  Matched {matched} articles with highlights out of {len(result)} total")
@@ -275,9 +285,20 @@ def load_dataset(
     if location:
         df = df[df["location"] == location]
 
-    # Merge highlight counts
+    # Merge highlight data (count + word count)
     highlights = fetch_highlights()
-    df["num_highlights"] = df["article_id"].map(highlights).fillna(0).astype(int)
+    df["num_highlights"] = (
+        df["article_id"]
+        .map(lambda aid: highlights.get(aid, {}).get("count", 0))
+        .fillna(0)
+        .astype(int)
+    )
+    df["highlighted_words"] = (
+        df["article_id"]
+        .map(lambda aid: highlights.get(aid, {}).get("words", 0))
+        .fillna(0)
+        .astype(int)
+    )
 
     # Merge tags
     tags_map = load_tags_from_db(db_path)
@@ -387,8 +408,10 @@ def get_article_details(article_id: str, db_path: str = "reader_triage.db") -> d
 
     conn.close()
 
-    # Get highlight count
+    # Get highlight data
     highlights = fetch_highlights()
-    details["num_highlights"] = highlights.get(article_id, 0)
+    hl_data = highlights.get(article_id, {"count": 0, "words": 0})
+    details["num_highlights"] = hl_data["count"]
+    details["highlighted_words"] = hl_data["words"]
 
     return details

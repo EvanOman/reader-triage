@@ -41,6 +41,7 @@
             <div class="flex items-center gap-0.5 ml-auto bg-dark-card border border-dark-border rounded-md p-0.5">
                 <button onclick="setSort('v2_score')" data-sort="v2_score" class="sort-btn text-[11px] font-medium px-2 py-1 rounded transition-colors {% if not active_sort or active_sort == 'v2_score' %}bg-accent/20 text-accent{% else %}text-gray-500 hover:text-gray-300{% endif %}">V2 Score</button>
                 <button onclick="setSort('v3_score')" data-sort="v3_score" class="sort-btn text-[11px] font-medium px-2 py-1 rounded transition-colors {% if active_sort == 'v3_score' %}bg-blue-500/20 text-blue-400{% else %}text-gray-500 hover:text-gray-300{% endif %}">V3 Score</button>
+                <button onclick="setSort('v4_score')" data-sort="v4_score" class="sort-btn text-[11px] font-medium px-2 py-1 rounded transition-colors {% if active_sort == 'v4_score' %}bg-emerald-500/20 text-emerald-400{% else %}text-gray-500 hover:text-gray-300{% endif %}">V4 Score</button>
                 <button onclick="setSort('added')" data-sort="added" class="sort-btn text-[11px] font-medium px-2 py-1 rounded transition-colors {% if active_sort == 'added' %}bg-accent/20 text-accent{% else %}text-gray-500 hover:text-gray-300{% endif %}">Added</button>
                 <button onclick="setSort('published')" data-sort="published" class="sort-btn text-[11px] font-medium px-2 py-1 rounded transition-colors {% if active_sort == 'published' %}bg-accent/20 text-accent{% else %}text-gray-500 hover:text-gray-300{% endif %}">Published</button>
             </div>
@@ -93,7 +94,7 @@
                             {% endif %}
                         </div>
 
-                        <!-- Dual scores: v2 and v3 side-by-side -->
+                        <!-- Triple scores: v2, v3, v4 side-by-side -->
                         <div class="flex-shrink-0 flex items-center gap-2">
                             <div class="text-right">
                                 <span class="text-lg font-semibold tabular-nums {% if article.info_score >= 60 %}text-accent{% elif article.info_score >= 30 %}text-gray-400{% else %}text-gray-600{% endif %}">{{ article.info_score|int }}</span>
@@ -106,6 +107,14 @@
                                 <span class="text-lg font-semibold tabular-nums text-gray-700">&mdash;</span>
                                 {% endif %}
                                 <span class="text-[9px] text-gray-600 ml-0.5">v3</span>
+                            </div>
+                            <div class="text-right">
+                                {% if article.v4_info_score is not none %}
+                                <span class="text-lg font-semibold tabular-nums {% if article.v4_info_score >= 60 %}text-emerald-400{% elif article.v4_info_score >= 30 %}text-gray-400{% else %}text-gray-600{% endif %}">{{ article.v4_info_score|int }}</span>
+                                {% else %}
+                                <span class="text-lg font-semibold tabular-nums text-gray-700">&mdash;</span>
+                                {% endif %}
+                                <span class="text-[9px] text-gray-600 ml-0.5">v4</span>
                             </div>
                         </div>
                     </div>
@@ -213,6 +222,9 @@
         const v3Score = a.v3_info_score;
         const v3Color = v3Score != null ? (v3Score >= 60 ? 'text-blue-400' : (v3Score >= 30 ? 'text-gray-400' : 'text-gray-600')) : 'text-gray-700';
         const v3Display = v3Score != null ? Math.round(v3Score) : '&mdash;';
+        const v4Score = a.v4_info_score;
+        const v4Color = v4Score != null ? (v4Score >= 60 ? 'text-emerald-400' : (v4Score >= 30 ? 'text-gray-400' : 'text-gray-600')) : 'text-gray-700';
+        const v4Display = v4Score != null ? Math.round(v4Score) : '&mdash;';
 
         const authorHtml = a.author ? `<span>${escapeHtml(a.author)}</span>` : '';
         const wordCountHtml = a.word_count ? `<span class="text-gray-600">/</span><span>${a.word_count} words</span>` : '';
@@ -245,6 +257,10 @@
                         <div class="text-right">
                             <span class="text-lg font-semibold tabular-nums ${v3Color}">${v3Display}</span>
                             <span class="text-[9px] text-gray-600 ml-0.5">v3</span>
+                        </div>
+                        <div class="text-right">
+                            <span class="text-lg font-semibold tabular-nums ${v4Color}">${v4Display}</span>
+                            <span class="text-[9px] text-gray-600 ml-0.5">v4</span>
                         </div>
                     </div>
                 </div>
@@ -290,11 +306,13 @@
                 btn.classList.remove('text-gray-500', 'hover:text-gray-300');
                 if (btnSort === 'v3_score') {
                     btn.classList.add('bg-blue-500/20', 'text-blue-400');
+                } else if (btnSort === 'v4_score') {
+                    btn.classList.add('bg-emerald-500/20', 'text-emerald-400');
                 } else {
                     btn.classList.add('bg-accent/20', 'text-accent');
                 }
             } else {
-                btn.classList.remove('bg-accent/20', 'text-accent', 'bg-blue-500/20', 'text-blue-400');
+                btn.classList.remove('bg-accent/20', 'text-accent', 'bg-blue-500/20', 'text-blue-400', 'bg-emerald-500/20', 'text-emerald-400');
                 btn.classList.add('text-gray-500', 'hover:text-gray-300');
             }
         });
@@ -339,7 +357,13 @@
 
     function sortArticles(articles) {
         const sorted = [...articles];
-        if (activeSort === 'v3_score') {
+        if (activeSort === 'v4_score') {
+            sorted.sort((a, b) => {
+                const sa = a.v4_info_score != null ? a.v4_info_score : -1;
+                const sb = b.v4_info_score != null ? b.v4_info_score : -1;
+                return sb - sa;
+            });
+        } else if (activeSort === 'v3_score') {
             sorted.sort((a, b) => {
                 const sa = a.v3_info_score != null ? a.v3_info_score : -1;
                 const sb = b.v3_info_score != null ? b.v3_info_score : -1;

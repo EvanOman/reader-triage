@@ -50,6 +50,10 @@ class Article(Base):
     site_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     reading_progress: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    # Calibration data
+    num_highlights: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    highlighted_words: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     # Timestamps
     readwise_created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     readwise_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -60,6 +64,9 @@ class Article(Base):
     # Relationships
     score: Mapped["ArticleScore | None"] = relationship(back_populates="article", uselist=False)
     binary_score: Mapped["BinaryArticleScore | None"] = relationship(
+        back_populates="article", uselist=False
+    )
+    v4_score: Mapped["V4ArticleScore | None"] = relationship(
         back_populates="article", uselist=False
     )
     summary: Mapped["Summary | None"] = relationship(back_populates="article", uselist=False)
@@ -160,6 +167,48 @@ class BinaryArticleScore(Base):
     __table_args__ = (
         Index("idx_v3_scores_info", "info_score"),
         Index("idx_v3_scores_article", "article_id"),
+    )
+
+
+class V4ArticleScore(Base):
+    """v4-binary score for an article using 24 tiered binary questions."""
+
+    __tablename__ = "article_scores_v4"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    article_id: Mapped[str] = mapped_column(String(50), ForeignKey("articles.id"), unique=True)
+
+    # Score components (0-25 each, total 0-100)
+    info_score: Mapped[float] = mapped_column(Float, default=0.0)
+    specificity_score: Mapped[int] = mapped_column(Integer, default=0)
+    novelty_score: Mapped[int] = mapped_column(Integer, default=0)
+    depth_score: Mapped[int] = mapped_column(Integer, default=0)
+    actionability_score: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Full binary responses (JSON text with q1-q24 booleans + evidence)
+    raw_responses: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Explanations
+    score_reasons: Mapped[str] = mapped_column(Text, default="[]")  # JSON list
+    overall_assessment: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Content quality flags
+    content_fetch_failed: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # Metadata
+    model_used: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    scoring_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    scored_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # Calibration data
+    highlighted_words: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Relationships
+    article: Mapped["Article"] = relationship(back_populates="v4_score")
+
+    __table_args__ = (
+        Index("idx_v4_scores_info", "info_score"),
+        Index("idx_v4_scores_article", "article_id"),
     )
 
 
@@ -383,6 +432,8 @@ async def init_db():
                 "content_fetch_failed",
             ),
             ("ALTER TABLE articles ADD COLUMN content TEXT", "content"),
+            ("ALTER TABLE articles ADD COLUMN num_highlights INTEGER", "num_highlights"),
+            ("ALTER TABLE articles ADD COLUMN highlighted_words INTEGER", "highlighted_words"),
         ]:
             try:
                 await conn.execute(text(stmt))

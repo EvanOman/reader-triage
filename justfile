@@ -105,6 +105,14 @@ reembed:
 backfill-v3 *ARGS:
     uv run python -m tools.backfill_v3 {{ARGS}}
 
+# Sync archived articles: score + fetch highlights
+sync-archive *ARGS:
+    uv run python -m tools.sync_archive {{ARGS}}
+
+# Backfill v4-binary scores (prioritizes articles with highlight data)
+backfill-v4 *ARGS:
+    uv run python -m tools.backfill_v4 {{ARGS}}
+
 cal-dimensions *ARGS:
     uv run python -m tools.calibrate dimensions {{ARGS}}
 
