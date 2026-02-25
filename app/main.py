@@ -45,7 +45,7 @@ async def lifespan(app: FastAPI):
         _tracer_provider.shutdown()
 
 
-app = FastAPI(
+app = FastAPI(  # type: ignore[invalid-assignment]  # `app` shadows package name; required by uvicorn
     title="Reader Triage",
     description="Surface high-value articles from Readwise Reader",
     version="0.1.0",
@@ -54,11 +54,11 @@ app = FastAPI(
 )
 
 # Include routers
-app.include_router(api.router)
-app.include_router(chat.router)
-app.include_router(pages.router)
-app.include_router(podcasts_api.router)
-app.include_router(podcasts_pages.router)
+app.include_router(api.router)  # type: ignore[unresolved-attribute]
+app.include_router(chat.router)  # type: ignore[unresolved-attribute]
+app.include_router(pages.router)  # type: ignore[unresolved-attribute]
+app.include_router(podcasts_api.router)  # type: ignore[unresolved-attribute]
+app.include_router(podcasts_pages.router)  # type: ignore[unresolved-attribute]
 
 # Set up OpenTelemetry tracing
 _tracer_provider = setup_tracing(app)
