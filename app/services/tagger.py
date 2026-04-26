@@ -5,8 +5,7 @@ import logging
 import re
 from dataclasses import dataclass
 
-from anthropic import Anthropic
-from anthropic.types import TextBlock
+import litellm
 from sqlalchemy import delete, select
 
 from app.config import get_settings
@@ -230,25 +229,28 @@ def _build_tag_catalog() -> str:
 _TAG_CATALOG = _build_tag_catalog()
 
 
-def classify_content(
+async def classify_content(
     title: str,
     author: str | None,
     content: str,
-    anthropic_client: Anthropic,
+    model: str | None = None,
     content_type_hint: str = "article",
 ) -> tuple[list[str] | None, tuple[str, int, int] | None]:
-    """Classify content into topic tags using Claude.
+    """Classify content into topic tags using an LLM via LiteLLM.
 
     Parameters:
         title: Content title.
         author: Content author (or None).
         content: Text content to classify.
-        anthropic_client: Anthropic client instance.
+        model: LiteLLM model identifier (e.g. "openai/gpt-4.1-mini"). Defaults to TAGGER_MODEL.
         content_type_hint: "article" or "podcast" — adjusts truncation limit and prompt.
 
     Returns:
         (validated_tag_slugs, (model, input_tokens, output_tokens)) or (None, None).
     """
+    if model is None:
+        model = get_settings().tagger_model
+
     max_length = _MAX_CONTENT_LENGTH.get(content_type_hint, 15000)
     if len(content) > max_length:
         content = content[:max_length] + "... [truncated]"
@@ -265,18 +267,20 @@ def classify_content(
     )
 
     try:
-        model = "claude-sonnet-4-20250514"
-        response = anthropic_client.messages.create(
+        response = await litellm.acompletion(
             model=model,
             max_tokens=200,
             messages=[{"role": "user", "content": prompt}],
         )
 
-        usage_info = (model, response.usage.input_tokens, response.usage.output_tokens)
+        choice = response.choices[0]
+        input_tokens = response.usage.prompt_tokens
+        output_tokens = response.usage.completion_tokens
+        # Strip provider prefix for usage logging (e.g. "openai/gpt-4.1-mini" → "gpt-4.1-mini")
+        model_short = model.split("/", 1)[-1] if "/" in model else model
+        usage_info = (model_short, input_tokens, output_tokens)
 
-        first_block = response.content[0]
-        assert isinstance(first_block, TextBlock)
-        text = first_block.text.strip()
+        text = choice.message.content.strip()
         # Remove any markdown code blocks if present
         if text.startswith("```"):
             text = re.sub(r"```(?:json)?\n?", "", text)
@@ -293,16 +297,14 @@ def classify_content(
 
         return valid_tags, usage_info
     except Exception as e:
-        logger.exception("Error classifying content '%s': %s", title, e)
+        logger.error("Error classifying content '%s': %s", title, e)
         return None, None
 
 
 class ArticleTagger:
-    """Tags articles with predefined topic tags using Claude."""
+    """Tags articles with predefined topic tags via LiteLLM."""
 
     def __init__(self):
-        settings = get_settings()
-        self._anthropic = Anthropic(api_key=settings.anthropic_api_key)
         self._readwise = get_readwise_service()
 
     async def tag_article(self, article_id: str, force: bool = False) -> list[str]:
@@ -340,7 +342,12 @@ class ArticleTagger:
                 return []
 
             # Classify
-            tag_slugs, usage_info = self._classify_article(article.title, article.author, content)
+            tag_slugs, usage_info = await classify_content(
+                title=article.title,
+                author=article.author,
+                content=content,
+                content_type_hint="article",
+            )
             if tag_slugs is None:
                 return []
 
@@ -416,21 +423,6 @@ class ArticleTagger:
                 results[article_id] = tags
 
         return results
-
-    def _classify_article(
-        self, title: str, author: str | None, content: str
-    ) -> tuple[list[str] | None, tuple[str, int, int] | None]:
-        """Call Claude to classify an article.
-
-        Returns (validated_tag_slugs, (model, input_tokens, output_tokens)) or (None, None).
-        """
-        return classify_content(
-            title=title,
-            author=author,
-            content=content,
-            anthropic_client=self._anthropic,
-            content_type_hint="article",
-        )
 
 
 # Singleton instance

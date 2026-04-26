@@ -24,10 +24,10 @@ class TestComputeCost:
         assert cost == pytest.approx(3.0 + 15.0)
 
     def test_known_model_haiku(self):
-        """Haiku pricing: $0.25/Mtok input, $1.25/Mtok output."""
+        """Haiku 4.5 pricing: $1.0/Mtok input, $5.0/Mtok output."""
         model = "claude-haiku-4-5-20251001"
         cost = compute_cost(model, input_tokens=1_000_000, output_tokens=1_000_000)
-        assert cost == pytest.approx(0.25 + 1.25)
+        assert cost == pytest.approx(1.0 + 5.0)
 
     def test_unknown_model_uses_default(self):
         """Unknown model falls back to DEFAULT_PRICING."""

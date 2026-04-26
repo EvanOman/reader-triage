@@ -62,7 +62,10 @@ Strict typing is enforced via `ty`. Rules:
 
 Configured in `.env`:
 - `READWISE_TOKEN` - Readwise API key
-- `ANTHROPIC_API_KEY` - Claude API key
+- `ANTHROPIC_API_KEY` - Claude API key (used by chat only)
+- `OPENAI_API_KEY` - OpenAI API key (used by scoring, tagging, summarization)
+- `SCORING_MODEL` - LiteLLM model ID for scoring (default: `openai/gpt-5.4`)
+- `TAGGER_MODEL` - LiteLLM model ID for tagging/summarization (default: `openai/gpt-4.1-mini`)
 - `DATABASE_URL` - SQLite path (default: ./reader_triage.db)
 - `ROOT_PATH` - URL prefix for reverse proxy (default: empty)
 - `OTLP_ENDPOINT` - OpenTelemetry collector endpoint (default: http://localhost:4317)

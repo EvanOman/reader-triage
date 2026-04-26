@@ -3,51 +3,67 @@
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from anthropic.types import TextBlock
+import pytest
 
 from app.models.article import Article, ArticleScore, Summary
 from app.services.summarizer import (
     Summarizer,
     SummaryResult,
 )
-from tests.factories import mock_anthropic_response
+from tests.factories import mock_litellm_response
+
+
+@pytest.fixture(autouse=True)
+def _stop_lingering_patches():
+    """Stop any patches started via .start() after each test."""
+    yield
+    patch.stopall()
+
+
+# Module-level handle to the most recently installed acompletion mock.
+# Tests that need to inspect call args read this directly.
+_last_acompletion_mock: AsyncMock | None = None
+
+
+def _mock_acompletion(
+    claude_response_data: dict[str, object] | str,
+    *,
+    input_tokens: int = 400,
+    output_tokens: int = 150,
+) -> AsyncMock:
+    """Patch litellm.acompletion and return the AsyncMock.
+
+    Patch is auto-stopped by the autouse fixture at test teardown.
+    """
+    global _last_acompletion_mock
+    mock = AsyncMock(
+        return_value=mock_litellm_response(
+            claude_response_data,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
+    )
+    patch("app.services.summarizer.litellm.acompletion", mock).start()
+    _last_acompletion_mock = mock
+    return mock
 
 
 def _build_summarizer(claude_response_data: dict[str, object]) -> Summarizer:
-    """Build a Summarizer with mocked Anthropic client."""
-    with (
-        patch("app.services.summarizer.Anthropic") as mock_anthropic_cls,
-        patch("app.services.summarizer.get_readwise_service"),
-    ):
-        mock_client = MagicMock()
-        mock_client.messages.create.return_value = mock_anthropic_response(
-            claude_response_data, input_tokens=400, output_tokens=150
-        )
-        mock_anthropic_cls.return_value = mock_client
-        summarizer = Summarizer()
-    return summarizer
+    """Build a Summarizer with litellm.acompletion mocked."""
+    _mock_acompletion(claude_response_data)
+    patch("app.services.summarizer.get_readwise_service").start()
+    return Summarizer()
 
 
 def _build_summarizer_with_readwise(
     claude_response_data: dict[str, object], readwise_doc: object
 ) -> Summarizer:
-    """Build a Summarizer with mocked Anthropic and Readwise."""
-    with (
-        patch("app.services.summarizer.Anthropic") as mock_anthropic_cls,
-        patch("app.services.summarizer.get_readwise_service") as mock_rw,
-    ):
-        mock_client = MagicMock()
-        mock_client.messages.create.return_value = mock_anthropic_response(
-            claude_response_data, input_tokens=400, output_tokens=150
-        )
-        mock_anthropic_cls.return_value = mock_client
-
-        mock_rw_service = AsyncMock()
-        mock_rw_service.get_document.return_value = readwise_doc
-        mock_rw.return_value = mock_rw_service
-
-        summarizer = Summarizer()
-    return summarizer
+    """Build a Summarizer with litellm and Readwise mocked."""
+    _mock_acompletion(claude_response_data)
+    rw_service = AsyncMock()
+    rw_service.get_document.return_value = readwise_doc
+    patch("app.services.summarizer.get_readwise_service", return_value=rw_service).start()
+    return Summarizer()
 
 
 def _make_article(
@@ -117,34 +133,27 @@ class TestGenerateSummary:
         summarizer = _build_summarizer(data)
 
         await summarizer._generate_summary("Title", "Author", "Content", article_id="art-1")
-        mock_log_usage.assert_awaited_once_with(
-            service="summarizer",
-            model="claude-sonnet-4-20250514",
-            input_tokens=400,
-            output_tokens=150,
-            article_id="art-1",
-        )
+        mock_log_usage.assert_awaited_once()
+        kwargs = mock_log_usage.call_args.kwargs
+        assert kwargs["service"] == "summarizer"
+        assert kwargs["input_tokens"] == 400
+        assert kwargs["output_tokens"] == 150
+        assert kwargs["article_id"] == "art-1"
+        # Model name varies by config but must not include the provider prefix
+        assert "/" not in kwargs["model"]
 
     @patch("app.services.summarizer.log_usage", new_callable=AsyncMock)
     async def test_truncates_long_content(self, mock_log_usage):
         """Content longer than 15000 chars is truncated."""
         data = {"summary": "Summary.", "key_points": ["P1"]}
-        with (
-            patch("app.services.summarizer.Anthropic") as mock_anthropic_cls,
-            patch("app.services.summarizer.get_readwise_service"),
-        ):
-            mock_client = MagicMock()
-            mock_client.messages.create.return_value = mock_anthropic_response(
-                data, input_tokens=400, output_tokens=150
-            )
-            mock_anthropic_cls.return_value = mock_client
-            summarizer = Summarizer()
+        summarizer = _build_summarizer(data)
+        mock_acompletion = _last_acompletion_mock
+        assert mock_acompletion is not None
 
         long_content = "B" * 20000
         result = await summarizer._generate_summary("Title", "Author", long_content)
 
-        call_args = mock_client.messages.create.call_args
-        prompt_content = call_args[1]["messages"][0]["content"]
+        prompt_content = mock_acompletion.call_args.kwargs["messages"][0]["content"]
         assert "... [truncated]" in prompt_content
         assert result is not None
 
@@ -152,80 +161,44 @@ class TestGenerateSummary:
     async def test_author_defaults_to_unknown(self, mock_log_usage):
         """When author is None, the prompt uses 'Unknown'."""
         data = {"summary": "Summary.", "key_points": ["P1"]}
-        with (
-            patch("app.services.summarizer.Anthropic") as mock_anthropic_cls,
-            patch("app.services.summarizer.get_readwise_service"),
-        ):
-            mock_client = MagicMock()
-            mock_client.messages.create.return_value = mock_anthropic_response(
-                data, input_tokens=400, output_tokens=150
-            )
-            mock_anthropic_cls.return_value = mock_client
-            summarizer = Summarizer()
+        summarizer = _build_summarizer(data)
+        mock_acompletion = _last_acompletion_mock
+        assert mock_acompletion is not None
 
         await summarizer._generate_summary("Title", None, "Content")
-        call_args = mock_client.messages.create.call_args
-        prompt_content = call_args[1]["messages"][0]["content"]
+        prompt_content = mock_acompletion.call_args.kwargs["messages"][0]["content"]
         assert "Author: Unknown" in prompt_content
 
     @patch("app.services.summarizer.log_usage", new_callable=AsyncMock)
     async def test_markdown_code_blocks_stripped(self, mock_log_usage):
-        """Claude sometimes wraps JSON in markdown code blocks."""
+        """LLMs sometimes wrap JSON in markdown code blocks."""
         json_data = {"summary": "Summary from markdown.", "key_points": ["P1"]}
-        with (
-            patch("app.services.summarizer.Anthropic") as mock_anthropic_cls,
-            patch("app.services.summarizer.get_readwise_service"),
-        ):
-            mock_client = MagicMock()
-            content_block = TextBlock(
-                type="text",
-                text=f"```json\n{json.dumps(json_data)}\n```",
-            )
-            usage = MagicMock()
-            usage.input_tokens = 400
-            usage.output_tokens = 150
-            response = MagicMock()
-            response.content = [content_block]
-            response.usage = usage
-            mock_client.messages.create.return_value = response
-            mock_anthropic_cls.return_value = mock_client
-            summarizer = Summarizer()
+        _mock_acompletion(f"```json\n{json.dumps(json_data)}\n```")
+        patch("app.services.summarizer.get_readwise_service").start()
+        summarizer = Summarizer()
 
         result = await summarizer._generate_summary("Title", "Author", "Content")
         assert result is not None
         assert result.summary_text == "Summary from markdown."
 
     async def test_api_error_returns_none(self):
-        """When Claude API raises an exception, returns None."""
-        with (
-            patch("app.services.summarizer.Anthropic") as mock_anthropic_cls,
-            patch("app.services.summarizer.get_readwise_service"),
-        ):
-            mock_client = MagicMock()
-            mock_client.messages.create.side_effect = RuntimeError("API down")
-            mock_anthropic_cls.return_value = mock_client
-            summarizer = Summarizer()
+        """When the LLM API raises an exception, returns None."""
+        patch(
+            "app.services.summarizer.litellm.acompletion",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("API down"),
+        ).start()
+        patch("app.services.summarizer.get_readwise_service").start()
+        summarizer = Summarizer()
 
         result = await summarizer._generate_summary("Title", "Author", "Content")
         assert result is None
 
     async def test_invalid_json_returns_none(self):
-        """When Claude returns invalid JSON, returns None."""
-        with (
-            patch("app.services.summarizer.Anthropic") as mock_anthropic_cls,
-            patch("app.services.summarizer.get_readwise_service"),
-        ):
-            mock_client = MagicMock()
-            content_block = TextBlock(type="text", text="This is not JSON")
-            usage = MagicMock()
-            usage.input_tokens = 400
-            usage.output_tokens = 150
-            response = MagicMock()
-            response.content = [content_block]
-            response.usage = usage
-            mock_client.messages.create.return_value = response
-            mock_anthropic_cls.return_value = mock_client
-            summarizer = Summarizer()
+        """When the LLM returns invalid JSON, returns None."""
+        _mock_acompletion("This is not JSON")
+        patch("app.services.summarizer.get_readwise_service").start()
+        summarizer = Summarizer()
 
         result = await summarizer._generate_summary("Title", "Author", "Content")
         assert result is None
@@ -245,21 +218,13 @@ class TestGenerateSummary:
     async def test_content_not_truncated_under_limit(self, mock_log_usage):
         """Content under 15000 chars is not truncated."""
         data = {"summary": "Summary.", "key_points": ["P1"]}
-        with (
-            patch("app.services.summarizer.Anthropic") as mock_anthropic_cls,
-            patch("app.services.summarizer.get_readwise_service"),
-        ):
-            mock_client = MagicMock()
-            mock_client.messages.create.return_value = mock_anthropic_response(
-                data, input_tokens=400, output_tokens=150
-            )
-            mock_anthropic_cls.return_value = mock_client
-            summarizer = Summarizer()
+        summarizer = _build_summarizer(data)
+        mock_acompletion = _last_acompletion_mock
+        assert mock_acompletion is not None
 
         short_content = "C" * 10000
         await summarizer._generate_summary("Title", "Author", short_content)
-        call_args = mock_client.messages.create.call_args
-        prompt_content = call_args[1]["messages"][0]["content"]
+        prompt_content = mock_acompletion.call_args.kwargs["messages"][0]["content"]
         assert "... [truncated]" not in prompt_content
 
 
@@ -380,19 +345,15 @@ class TestSummarize:
         readwise_doc.content = "Some content to summarize."
         readwise_doc.summary = None
 
-        with (
-            patch("app.services.summarizer.Anthropic") as mock_anthropic_cls,
-            patch("app.services.summarizer.get_readwise_service") as mock_rw,
-        ):
-            mock_client = MagicMock()
-            mock_client.messages.create.side_effect = RuntimeError("API failure")
-            mock_anthropic_cls.return_value = mock_client
-
-            mock_rw_service = AsyncMock()
-            mock_rw_service.get_document.return_value = readwise_doc
-            mock_rw.return_value = mock_rw_service
-
-            summarizer = Summarizer()
+        patch(
+            "app.services.summarizer.litellm.acompletion",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("API failure"),
+        ).start()
+        rw_service = AsyncMock()
+        rw_service.get_document.return_value = readwise_doc
+        patch("app.services.summarizer.get_readwise_service", return_value=rw_service).start()
+        summarizer = Summarizer()
 
         result = await summarizer.summarize(article)
         assert result is None
@@ -430,11 +391,8 @@ class TestGetSummary:
             session.add(summary)
             await session.commit()
 
-        with (
-            patch("app.services.summarizer.Anthropic"),
-            patch("app.services.summarizer.get_readwise_service"),
-        ):
-            summarizer = Summarizer()
+        patch("app.services.summarizer.get_readwise_service").start()
+        summarizer = Summarizer()
 
         result = await summarizer.get_summary("get-sum-1")
         assert result is not None
@@ -445,11 +403,8 @@ class TestGetSummary:
         """Returns None when no summary exists."""
         mock_factory.return_value = session_factory
 
-        with (
-            patch("app.services.summarizer.Anthropic"),
-            patch("app.services.summarizer.get_readwise_service"),
-        ):
-            summarizer = Summarizer()
+        patch("app.services.summarizer.get_readwise_service").start()
+        summarizer = Summarizer()
 
         result = await summarizer.get_summary("nonexistent-article")
         assert result is None
@@ -702,7 +657,6 @@ class TestGetSummarizer:
 
     async def test_get_summarizer_returns_instance(self):
         with (
-            patch("app.services.summarizer.Anthropic"),
             patch("app.services.summarizer.get_readwise_service"),
             patch("app.services.summarizer._summarizer", None),
         ):
@@ -713,7 +667,6 @@ class TestGetSummarizer:
 
     async def test_get_summarizer_returns_same_instance(self):
         with (
-            patch("app.services.summarizer.Anthropic"),
             patch("app.services.summarizer.get_readwise_service"),
             patch("app.services.summarizer._summarizer", None),
         ):

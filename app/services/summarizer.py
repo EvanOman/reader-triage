@@ -5,8 +5,7 @@ import logging
 import re
 from dataclasses import dataclass
 
-from anthropic import Anthropic
-from anthropic.types import TextBlock
+import litellm
 from sqlalchemy import select
 
 from app.config import get_settings
@@ -46,8 +45,6 @@ Respond with ONLY a JSON object in this exact format (no markdown, no extra text
     LOW_INFO_THRESHOLD = 30  # Articles scoring below this get summarized
 
     def __init__(self):
-        settings = get_settings()
-        self._anthropic = Anthropic(api_key=settings.anthropic_api_key)
         self._readwise = get_readwise_service()
 
     async def summarize(self, article: Article) -> Summary | None:
@@ -130,7 +127,7 @@ Respond with ONLY a JSON object in this exact format (no markdown, no extra text
     async def _generate_summary(
         self, title: str, author: str | None, content: str, article_id: str | None = None
     ) -> SummaryResult | None:
-        """Generate summary using Claude."""
+        """Generate summary using LiteLLM."""
         # Truncate content if too long
         max_content_length = 15000
         if len(content) > max_content_length:
@@ -143,25 +140,27 @@ Respond with ONLY a JSON object in this exact format (no markdown, no extra text
         )
 
         try:
-            model = "claude-sonnet-4-20250514"
-            response = self._anthropic.messages.create(
+            model = get_settings().tagger_model  # Summarizer uses same cheap model as tagger
+            response = await litellm.acompletion(
                 model=model,
                 max_tokens=500,
                 messages=[{"role": "user", "content": prompt}],
             )
 
+            input_tokens = response.usage.prompt_tokens
+            output_tokens = response.usage.completion_tokens
+            model_short = model.split("/", 1)[-1] if "/" in model else model
+
             # Log usage
             await log_usage(
                 service="summarizer",
-                model=model,
-                input_tokens=response.usage.input_tokens,
-                output_tokens=response.usage.output_tokens,
+                model=model_short,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
                 article_id=article_id,
             )
 
-            first_block = response.content[0]
-            assert isinstance(first_block, TextBlock)
-            text = first_block.text.strip()
+            text = response.choices[0].message.content.strip()
             # Remove any markdown code blocks if present
             if text.startswith("```"):
                 text = re.sub(r"```(?:json)?\n?", "", text)

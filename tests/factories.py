@@ -170,6 +170,31 @@ def mock_anthropic_response(
     return response
 
 
+def mock_litellm_response(
+    data: dict | str,
+    *,
+    input_tokens: int = 500,
+    output_tokens: int = 100,
+) -> MagicMock:
+    """Create a mock litellm.acompletion() return value.
+
+    Matches the shape: response.choices[0].message.content,
+    response.usage.prompt_tokens, response.usage.completion_tokens.
+    """
+    text = data if isinstance(data, str) else json.dumps(data)
+    message = MagicMock()
+    message.content = text
+    choice = MagicMock()
+    choice.message = message
+    usage = MagicMock()
+    usage.prompt_tokens = input_tokens
+    usage.completion_tokens = output_tokens
+    response = MagicMock()
+    response.choices = [choice]
+    response.usage = usage
+    return response
+
+
 def make_episode(
     *,
     id: int = 1,

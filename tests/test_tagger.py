@@ -3,7 +3,6 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from anthropic.types import TextBlock
 
 from app.models.article import Article, ArticleScore, ArticleTag
 from app.services.tagger import (
@@ -15,50 +14,76 @@ from app.services.tagger import (
     TAGS_BY_SLUG,
     ArticleTagger,
     TagDefinition,
+    classify_content,
     get_all_tags,
     get_tag,
     get_tag_colors,
     get_tag_names,
     get_tag_styles,
 )
-from tests.factories import mock_anthropic_response
+from tests.factories import mock_litellm_response
+
+
+@pytest.fixture(autouse=True)
+def _stop_lingering_patches():
+    """Stop any patches started via .start() after each test."""
+    yield
+    patch.stopall()
+
+
+# Module-level handle to the most recently installed acompletion mock.
+_last_acompletion_mock: AsyncMock | None = None
+
+
+def _mock_acompletion(
+    claude_response_data: dict[str, object] | str,
+    *,
+    input_tokens: int = 300,
+    output_tokens: int = 50,
+) -> AsyncMock:
+    """Patch litellm.acompletion in the tagger module and return the AsyncMock.
+
+    Patch is auto-stopped by the autouse fixture at test teardown.
+    """
+    global _last_acompletion_mock
+    mock = AsyncMock(
+        return_value=mock_litellm_response(
+            claude_response_data,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
+    )
+    patch("app.services.tagger.litellm.acompletion", mock).start()
+    _last_acompletion_mock = mock
+    return mock
 
 
 def _build_tagger(claude_response_data: dict[str, object]) -> ArticleTagger:
-    """Build an ArticleTagger with mocked dependencies."""
-    with (
-        patch("app.services.tagger.Anthropic") as mock_anthropic_cls,
-        patch("app.services.tagger.get_readwise_service"),
-    ):
-        mock_client = MagicMock()
-        mock_client.messages.create.return_value = mock_anthropic_response(
-            claude_response_data, input_tokens=300, output_tokens=50
-        )
-        mock_anthropic_cls.return_value = mock_client
-        tagger = ArticleTagger()
-    return tagger
+    """Build an ArticleTagger with litellm.acompletion mocked."""
+    _mock_acompletion(claude_response_data)
+    patch("app.services.tagger.get_readwise_service").start()
+    return ArticleTagger()
 
 
 def _build_tagger_with_readwise(
     claude_response_data: dict[str, object], readwise_doc: object
 ) -> ArticleTagger:
-    """Build an ArticleTagger with mocked Anthropic and Readwise."""
-    with (
-        patch("app.services.tagger.Anthropic") as mock_anthropic_cls,
-        patch("app.services.tagger.get_readwise_service") as mock_rw,
-    ):
-        mock_client = MagicMock()
-        mock_client.messages.create.return_value = mock_anthropic_response(
-            claude_response_data, input_tokens=300, output_tokens=50
-        )
-        mock_anthropic_cls.return_value = mock_client
+    """Build an ArticleTagger with litellm and Readwise mocked."""
+    _mock_acompletion(claude_response_data)
+    rw_service = AsyncMock()
+    rw_service.get_document.return_value = readwise_doc
+    patch("app.services.tagger.get_readwise_service", return_value=rw_service).start()
+    return ArticleTagger()
 
-        mock_rw_service = AsyncMock()
-        mock_rw_service.get_document.return_value = readwise_doc
-        mock_rw.return_value = mock_rw_service
 
-        tagger = ArticleTagger()
-    return tagger
+async def _classify_via_tagger(tagger: ArticleTagger, title: str, author: str | None, content: str):
+    """Helper to invoke classify_content matching the old _classify_article shape."""
+    return await classify_content(
+        title=title,
+        author=author,
+        content=content,
+        content_type_hint="article",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -159,156 +184,107 @@ class TestTagStyles:
 
 
 # ---------------------------------------------------------------------------
-# 3. _classify_article (Claude API interaction)
+# 3. classify_content (LLM API interaction)
 # ---------------------------------------------------------------------------
 
 
 class TestClassifyArticle:
-    """Test the _classify_article method that calls Claude."""
+    """Test the classify_content function that calls the LLM."""
 
     async def test_valid_tags_returned(self):
         data = {"tags": ["ai-dev-tools", "software-eng"]}
-        tagger = _build_tagger(data)
-        tags, usage_info = tagger._classify_article("Test Title", "Author", "Content here")
+        _build_tagger(data)
+        tags, usage_info = await _classify_via_tagger(None, "Test Title", "Author", "Content here")
 
         assert tags == ["ai-dev-tools", "software-eng"]
         assert usage_info is not None
         model, in_tok, out_tok = usage_info
-        assert model == "claude-sonnet-4-20250514"
+        # Model name is config-driven; just verify provider prefix is stripped
+        assert "/" not in model
         assert in_tok == 300
         assert out_tok == 50
 
     async def test_invalid_slugs_filtered_out(self):
         data = {"tags": ["ai-dev-tools", "invalid-slug", "software-eng"]}
-        tagger = _build_tagger(data)
-        tags, usage_info = tagger._classify_article("Test Title", "Author", "Content here")
+        _build_tagger(data)
+        tags, usage_info = await _classify_via_tagger(None, "Test Title", "Author", "Content here")
 
         assert tags == ["ai-dev-tools", "software-eng"]
         assert usage_info is not None
 
     async def test_all_invalid_slugs_returns_empty_list(self):
         data = {"tags": ["bad-1", "bad-2"]}
-        tagger = _build_tagger(data)
-        tags, usage_info = tagger._classify_article("Test Title", "Author", "Content here")
+        _build_tagger(data)
+        tags, usage_info = await _classify_via_tagger(None, "Test Title", "Author", "Content here")
 
         assert tags == []
         assert usage_info is not None
 
     async def test_empty_tags_list(self):
         data = {"tags": []}
-        tagger = _build_tagger(data)
-        tags, usage_info = tagger._classify_article("Test Title", "Author", "Content here")
+        _build_tagger(data)
+        tags, usage_info = await _classify_via_tagger(None, "Test Title", "Author", "Content here")
 
         assert tags == []
         assert usage_info is not None
 
     async def test_missing_tags_key_returns_empty(self):
         data = {"other_key": "value"}
-        tagger = _build_tagger(data)
-        tags, usage_info = tagger._classify_article("Test Title", "Author", "Content here")
+        _build_tagger(data)
+        tags, usage_info = await _classify_via_tagger(None, "Test Title", "Author", "Content here")
 
         assert tags == []
         assert usage_info is not None
 
     async def test_content_truncated_at_15000_chars(self):
         """Content longer than 15000 chars should be truncated."""
-        data = {"tags": ["ai-dev-tools"]}
-        with (
-            patch("app.services.tagger.Anthropic") as mock_anthropic_cls,
-            patch("app.services.tagger.get_readwise_service"),
-        ):
-            mock_client = MagicMock()
-            mock_client.messages.create.return_value = mock_anthropic_response(
-                data, input_tokens=300, output_tokens=50
-            )
-            mock_anthropic_cls.return_value = mock_client
-            tagger = ArticleTagger()
+        _build_tagger({"tags": ["ai-dev-tools"]})
+        mock_acompletion = _last_acompletion_mock
+        assert mock_acompletion is not None
 
         long_content = "A" * 20000
-        tags, _ = tagger._classify_article("Test", "Author", long_content)
+        await _classify_via_tagger(None, "Test", "Author", long_content)
 
-        # Verify the call was made with truncated content
-        call_args = mock_client.messages.create.call_args
-        prompt_content = call_args[1]["messages"][0]["content"]
+        prompt_content = mock_acompletion.call_args.kwargs["messages"][0]["content"]
         assert "... [truncated]" in prompt_content
 
     async def test_author_defaults_to_unknown_when_none(self):
         """When author is None, prompt should use 'Unknown'."""
-        data = {"tags": ["ai-dev-tools"]}
-        with (
-            patch("app.services.tagger.Anthropic") as mock_anthropic_cls,
-            patch("app.services.tagger.get_readwise_service"),
-        ):
-            mock_client = MagicMock()
-            mock_client.messages.create.return_value = mock_anthropic_response(
-                data, input_tokens=300, output_tokens=50
-            )
-            mock_anthropic_cls.return_value = mock_client
-            tagger = ArticleTagger()
+        _build_tagger({"tags": ["ai-dev-tools"]})
+        mock_acompletion = _last_acompletion_mock
+        assert mock_acompletion is not None
 
-        tagger._classify_article("Test", None, "Content")
-        call_args = mock_client.messages.create.call_args
-        prompt_content = call_args[1]["messages"][0]["content"]
+        await _classify_via_tagger(None, "Test", None, "Content")
+        prompt_content = mock_acompletion.call_args.kwargs["messages"][0]["content"]
         assert "Author: Unknown" in prompt_content
 
     async def test_markdown_code_blocks_stripped(self):
-        """Claude sometimes wraps JSON in markdown code blocks."""
-        with (
-            patch("app.services.tagger.Anthropic") as mock_anthropic_cls,
-            patch("app.services.tagger.get_readwise_service"),
-        ):
-            mock_client = MagicMock()
-            content_block = TextBlock(
-                type="text",
-                text='```json\n{"tags": ["ai-agents", "startups"]}\n```',
-            )
-            usage = MagicMock()
-            usage.input_tokens = 300
-            usage.output_tokens = 50
-            response = MagicMock()
-            response.content = [content_block]
-            response.usage = usage
-            mock_client.messages.create.return_value = response
-            mock_anthropic_cls.return_value = mock_client
-            tagger = ArticleTagger()
+        """LLMs sometimes wrap JSON in markdown code blocks."""
+        _mock_acompletion('```json\n{"tags": ["ai-agents", "startups"]}\n```')
+        patch("app.services.tagger.get_readwise_service").start()
 
-        tags, _ = tagger._classify_article("Test", "Author", "Content")
+        tags, _ = await _classify_via_tagger(None, "Test", "Author", "Content")
         assert tags == ["ai-agents", "startups"]
 
     async def test_api_error_returns_none(self):
-        """When Claude API raises an exception, returns (None, None)."""
-        with (
-            patch("app.services.tagger.Anthropic") as mock_anthropic_cls,
-            patch("app.services.tagger.get_readwise_service"),
-        ):
-            mock_client = MagicMock()
-            mock_client.messages.create.side_effect = RuntimeError("API Error")
-            mock_anthropic_cls.return_value = mock_client
-            tagger = ArticleTagger()
+        """When the LLM API raises an exception, returns (None, None)."""
+        patch(
+            "app.services.tagger.litellm.acompletion",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("API Error"),
+        ).start()
+        patch("app.services.tagger.get_readwise_service").start()
 
-        tags, usage_info = tagger._classify_article("Test", "Author", "Content")
+        tags, usage_info = await _classify_via_tagger(None, "Test", "Author", "Content")
         assert tags is None
         assert usage_info is None
 
     async def test_invalid_json_returns_none(self):
-        """When Claude returns invalid JSON, returns (None, None)."""
-        with (
-            patch("app.services.tagger.Anthropic") as mock_anthropic_cls,
-            patch("app.services.tagger.get_readwise_service"),
-        ):
-            mock_client = MagicMock()
-            content_block = TextBlock(type="text", text="not valid json at all")
-            usage = MagicMock()
-            usage.input_tokens = 300
-            usage.output_tokens = 50
-            response = MagicMock()
-            response.content = [content_block]
-            response.usage = usage
-            mock_client.messages.create.return_value = response
-            mock_anthropic_cls.return_value = mock_client
-            tagger = ArticleTagger()
+        """When the LLM returns invalid JSON, returns (None, None)."""
+        _mock_acompletion("not valid json at all")
+        patch("app.services.tagger.get_readwise_service").start()
 
-        tags, usage_info = tagger._classify_article("Test", "Author", "Content")
+        tags, usage_info = await _classify_via_tagger(None, "Test", "Author", "Content")
         assert tags is None
         assert usage_info is None
 
@@ -508,19 +484,15 @@ class TestTagArticle:
             await session.commit()
 
         # Build tagger that will fail on classify
-        with (
-            patch("app.services.tagger.Anthropic") as mock_anthropic_cls,
-            patch("app.services.tagger.get_readwise_service") as mock_rw,
-        ):
-            mock_client = MagicMock()
-            mock_client.messages.create.side_effect = RuntimeError("API down")
-            mock_anthropic_cls.return_value = mock_client
-
-            mock_rw_service = AsyncMock()
-            mock_rw_service.get_document.return_value = None
-            mock_rw.return_value = mock_rw_service
-
-            tagger = ArticleTagger()
+        patch(
+            "app.services.tagger.litellm.acompletion",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("API down"),
+        ).start()
+        rw_service = AsyncMock()
+        rw_service.get_document.return_value = None
+        patch("app.services.tagger.get_readwise_service", return_value=rw_service).start()
+        tagger = ArticleTagger()
 
         result = await tagger.tag_article("api-fail-1")
         assert result == []
@@ -739,7 +711,6 @@ class TestGetTagger:
 
     async def test_get_tagger_returns_instance(self):
         with (
-            patch("app.services.tagger.Anthropic"),
             patch("app.services.tagger.get_readwise_service"),
             patch("app.services.tagger._tagger", None),
         ):
@@ -750,7 +721,6 @@ class TestGetTagger:
 
     async def test_get_tagger_returns_same_instance(self):
         with (
-            patch("app.services.tagger.Anthropic"),
             patch("app.services.tagger.get_readwise_service"),
             patch("app.services.tagger._tagger", None),
         ):

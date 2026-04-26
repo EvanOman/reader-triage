@@ -50,24 +50,28 @@ def _make_v4_prediction(data: dict) -> MagicMock:
 
 
 def _setup_all_strategy_mocks(scorer: ArticleScorer) -> None:
-    """Set up default DSPy mocks on all three strategies of an ArticleScorer."""
-    # v2 strategy
+    """Set up default DSPy mocks on the scorer's loaded strategies.
+
+    V3/V4 strategies are optional in production (None by default), so this
+    only mocks them if the scorer was constructed with explicit strategies.
+    """
+    # v2 strategy (always present)
     v2_data = make_claude_response()
     scorer._strategy._predict_article = MagicMock(return_value=_make_v2_prediction(v2_data))
     scorer._strategy._predict_podcast = MagicMock(return_value=_make_v2_prediction(v2_data))
     scorer._strategy._lm = mock_lm_history()
 
-    # v3 strategy
-    v3_data = _make_v3_response()
-    scorer._v3_strategy._predict_article = MagicMock(return_value=_make_v3_prediction(v3_data))
-    scorer._v3_strategy._predict_podcast = MagicMock(return_value=_make_v3_prediction(v3_data))
-    scorer._v3_strategy._lm = mock_lm_history()
+    if scorer._v3_strategy is not None:
+        v3_data = _make_v3_response()
+        scorer._v3_strategy._predict_article = MagicMock(return_value=_make_v3_prediction(v3_data))
+        scorer._v3_strategy._predict_podcast = MagicMock(return_value=_make_v3_prediction(v3_data))
+        scorer._v3_strategy._lm = mock_lm_history()
 
-    # v4 strategy
-    v4_data = _make_v4_response()
-    scorer._v4_strategy._predict_article = MagicMock(return_value=_make_v4_prediction(v4_data))
-    scorer._v4_strategy._predict_podcast = MagicMock(return_value=_make_v4_prediction(v4_data))
-    scorer._v4_strategy._lm = mock_lm_history()
+    if scorer._v4_strategy is not None:
+        v4_data = _make_v4_response()
+        scorer._v4_strategy._predict_article = MagicMock(return_value=_make_v4_prediction(v4_data))
+        scorer._v4_strategy._predict_podcast = MagicMock(return_value=_make_v4_prediction(v4_data))
+        scorer._v4_strategy._lm = mock_lm_history()
 
 
 # ---------------------------------------------------------------------------
@@ -455,10 +459,8 @@ class TestProcessDocuments:
 
     async def test_claude_returning_none_skips_article(self, scorer, fake_readwise, deps):
         """When _score_document returns None, article is skipped."""
-        # Make all strategies' predict raise to simulate API failure
+        # Make the v2 strategy's predict raise to simulate API failure
         scorer._strategy._predict_article = MagicMock(side_effect=Exception("API error"))
-        scorer._v3_strategy._predict_article = MagicMock(side_effect=Exception("API error"))
-        scorer._v4_strategy._predict_article = MagicMock(side_effect=Exception("API error"))
 
         doc = make_document(id="fail-1")
         fake_readwise.add_document(doc)
@@ -791,146 +793,3 @@ class TestRecomputePriorities:
         count = await scorer.recompute_priorities()
 
         assert count == 0
-
-
-# ---------------------------------------------------------------------------
-# Triple scoring (v2 + v3 + v4) tests
-# ---------------------------------------------------------------------------
-
-
-class TestTripleScoring:
-    """Tests for v2 + v3 + v4 scoring running independently."""
-
-    async def test_new_article_gets_all_three_scores(self, scorer, fake_readwise, deps):
-        """A new article should get v2, v3, and v4 scores."""
-        # All three strategies already have default mocks from the scorer fixture
-
-        doc = make_document(id="triple-1", title="Triple Score Article")
-        fake_readwise.add_document(doc)
-        meta_doc = replace(doc, content=None)
-
-        await scorer._process_documents([meta_doc])
-
-        async with deps["session_factory"]() as session:
-            v2_score = (
-                await session.execute(
-                    select(ArticleScore).where(ArticleScore.article_id == "triple-1")
-                )
-            ).scalar_one()
-            assert v2_score.info_score == _DEFAULT_TOTAL
-            assert v2_score.scoring_version == CURRENT_SCORING_VERSION
-
-            v3_score = (
-                await session.execute(
-                    select(BinaryArticleScore).where(BinaryArticleScore.article_id == "triple-1")
-                )
-            ).scalar_one()
-            assert v3_score.scoring_version == "v3-binary"
-            assert v3_score.raw_responses is not None
-
-            v4_score = (
-                await session.execute(
-                    select(V4ArticleScore).where(V4ArticleScore.article_id == "triple-1")
-                )
-            ).scalar_one()
-            assert v4_score.info_score == 100  # All positive yes, all penalties no
-            assert v4_score.scoring_version == "v4-binary"
-            assert v4_score.raw_responses is not None
-
-    async def test_v3_failure_does_not_block_v2_or_v4(self, scorer, fake_readwise, deps):
-        """If v3 scoring fails, v2 and v4 should still succeed."""
-        # Make v3 strategy's predict raise
-        scorer._v3_strategy._predict_article = MagicMock(side_effect=Exception("v3 API fail"))
-
-        doc = make_document(id="v3fail-1")
-        fake_readwise.add_document(doc)
-        meta_doc = replace(doc, content=None)
-
-        result = await scorer._process_documents([meta_doc])
-
-        assert result.newly_scored == 1  # v2 succeeded
-
-        async with deps["session_factory"]() as session:
-            v2 = (
-                await session.execute(
-                    select(ArticleScore).where(ArticleScore.article_id == "v3fail-1")
-                )
-            ).scalar_one()
-            assert v2.info_score == _DEFAULT_TOTAL
-
-            v3 = (
-                await session.execute(
-                    select(BinaryArticleScore).where(BinaryArticleScore.article_id == "v3fail-1")
-                )
-            ).scalar_one_or_none()
-            assert v3 is None  # v3 failed, no record
-
-            v4 = (
-                await session.execute(
-                    select(V4ArticleScore).where(V4ArticleScore.article_id == "v3fail-1")
-                )
-            ).scalar_one()
-            assert v4.info_score == 100
-
-    async def test_already_v2_scored_article_still_gets_v3_and_v4(
-        self, scorer, fake_readwise, deps
-    ):
-        """An article with a current v2 score but no v3/v4 should get both scored."""
-        sf = deps["session_factory"]
-
-        # Pre-insert article with current v2 score
-        async with sf() as session:
-            article = Article(
-                id="v2only-1",
-                title="V2 Only Article",
-                url="https://example.com/v2only",
-                author="Author",
-                location="new",
-                category="article",
-            )
-            score = ArticleScore(
-                article_id="v2only-1",
-                info_score=80,
-                specificity_score=20,
-                novelty_score=20,
-                depth_score=20,
-                actionability_score=20,
-                scoring_version=CURRENT_SCORING_VERSION,
-            )
-            session.add(article)
-            session.add(score)
-            await session.commit()
-
-        # v3 and v4 strategies already have default mocks from the scorer fixture
-
-        doc = make_document(id="v2only-1")
-        fake_readwise.add_document(doc)
-        meta_doc = replace(doc, content=None)
-
-        await scorer._process_documents([meta_doc])
-
-        async with sf() as session:
-            # v2 should be unchanged
-            v2 = (
-                await session.execute(
-                    select(ArticleScore).where(ArticleScore.article_id == "v2only-1")
-                )
-            ).scalar_one()
-            assert v2.info_score == 80  # Unchanged
-
-            # v3 should now exist
-            v3 = (
-                await session.execute(
-                    select(BinaryArticleScore).where(BinaryArticleScore.article_id == "v2only-1")
-                )
-            ).scalar_one()
-            assert v3.scoring_version == "v3-binary"
-
-            # v4 should now exist
-            v4 = (
-                await session.execute(
-                    select(V4ArticleScore).where(V4ArticleScore.article_id == "v2only-1")
-                )
-            ).scalar_one()
-            assert v4.info_score == 100
-            assert v4.scoring_version == "v4-binary"

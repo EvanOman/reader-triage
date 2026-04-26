@@ -34,12 +34,12 @@ class TestTagEpisode:
             episode_id = episode.id
 
         with (
-            patch("app.services.podcast_tagger.Anthropic"),
             patch(
                 "app.services.podcast_tagger.classify_content",
+                new_callable=AsyncMock,
                 return_value=(
                     ["ai-safety", "agi-scaling"],
-                    ("claude-sonnet-4-20250514", 500, 50),
+                    ("gpt-4.1-mini", 500, 50),
                 ),
             ),
             patch("app.services.podcast_tagger.log_usage", new_callable=AsyncMock),
@@ -55,8 +55,7 @@ class TestTagEpisode:
         """Test tagging non-existent episode returns empty list."""
         mock_factory.return_value = session_factory
 
-        with patch("app.services.podcast_tagger.Anthropic"):
-            tagger = PodcastTagger()
+        tagger = PodcastTagger()
         result = await tagger.tag_episode(9999)
         assert result == []
 
@@ -80,8 +79,7 @@ class TestTagEpisode:
             await session.commit()
             episode_id = episode.id
 
-        with patch("app.services.podcast_tagger.Anthropic"):
-            tagger = PodcastTagger()
+        tagger = PodcastTagger()
         result = await tagger.tag_episode(episode_id)
         assert result == []
 
@@ -112,8 +110,7 @@ class TestTagEpisode:
             await session.commit()
             episode_id = episode.id
 
-        with patch("app.services.podcast_tagger.Anthropic"):
-            tagger = PodcastTagger()
+        tagger = PodcastTagger()
         result = await tagger.tag_episode(episode_id, force=False)
         assert result == []
 
@@ -145,12 +142,12 @@ class TestTagEpisode:
             episode_id = episode.id
 
         with (
-            patch("app.services.podcast_tagger.Anthropic"),
             patch(
                 "app.services.podcast_tagger.classify_content",
+                new_callable=AsyncMock,
                 return_value=(
                     ["software-eng"],
-                    ("claude-sonnet-4-20250514", 500, 50),
+                    ("gpt-4.1-mini", 500, 50),
                 ),
             ),
             patch("app.services.podcast_tagger.log_usage", new_callable=AsyncMock),
@@ -191,12 +188,10 @@ class TestTagEpisode:
             await session.commit()
             episode_id = episode.id
 
-        with (
-            patch("app.services.podcast_tagger.Anthropic"),
-            patch(
-                "app.services.podcast_tagger.classify_content",
-                return_value=(None, None),
-            ),
+        with patch(
+            "app.services.podcast_tagger.classify_content",
+            new_callable=AsyncMock,
+            return_value=(None, None),
         ):
             tagger = PodcastTagger()
             result = await tagger.tag_episode(episode_id)

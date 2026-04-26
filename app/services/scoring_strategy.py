@@ -262,7 +262,11 @@ class CategoricalScoringStrategy:
     This is the original scoring approach extracted from score_content().
     """
 
-    def __init__(self, model_id: str = "anthropic/claude-sonnet-4-5-20250929") -> None:
+    def __init__(self, model_id: str | None = None) -> None:
+        if model_id is None:
+            from app.config import get_settings
+
+            model_id = get_settings().scoring_model
         self._model_id = model_id
         self._lm = _make_lm(model_id, max_tokens=700)
         self._predict_article = dspy.Predict(V2ArticleScoring)
@@ -374,7 +378,11 @@ class BinaryScoringStrategy:
     for better score discrimination. See docs/research/binary-scoring/.
     """
 
-    def __init__(self, model_id: str = "anthropic/claude-sonnet-4-5-20250929") -> None:
+    def __init__(self, model_id: str | None = None) -> None:
+        if model_id is None:
+            from app.config import get_settings
+
+            model_id = get_settings().scoring_model
         self._model_id = model_id
         self._lm = _make_lm(model_id, max_tokens=1200)
         self._predict_article = dspy.Predict(V3ArticleScoring)
@@ -693,7 +701,11 @@ class TieredBinaryScoringStrategy:
     discrimination. See docs/v4-implementation-plan.md.
     """
 
-    def __init__(self, model_id: str = "anthropic/claude-sonnet-4-5-20250929") -> None:
+    def __init__(self, model_id: str | None = None) -> None:
+        if model_id is None:
+            from app.config import get_settings
+
+            model_id = get_settings().scoring_model
         self._model_id = model_id
         self._lm = _make_lm(model_id, max_tokens=2000, temperature=0.0)
         self._predict_article = dspy.Predict(V4ArticleScoring)

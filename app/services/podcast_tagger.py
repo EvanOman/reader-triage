@@ -2,10 +2,8 @@
 
 import logging
 
-from anthropic import Anthropic
 from sqlalchemy import delete, select
 
-from app.config import get_settings
 from app.models.article import get_session_factory
 from app.models.podcast import PodcastEpisode, PodcastEpisodeTag
 from app.services.tagger import CURRENT_TAGGING_VERSION, classify_content
@@ -15,11 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class PodcastTagger:
-    """Tags podcast episodes with predefined topic tags using Claude."""
-
-    def __init__(self):
-        settings = get_settings()
-        self._anthropic = Anthropic(api_key=settings.anthropic_api_key)
+    """Tags podcast episodes with predefined topic tags via LiteLLM."""
 
     async def tag_episode(self, episode_id: int, force: bool = False) -> list[str]:
         """Tag a single episode. Returns list of tag slugs assigned.
@@ -56,11 +50,10 @@ class PodcastTagger:
             author = episode.podcast.title if episode.podcast else None
 
             # Classify
-            tag_slugs, usage_info = classify_content(
+            tag_slugs, usage_info = await classify_content(
                 title=episode.title,
                 author=author,
                 content=content,
-                anthropic_client=self._anthropic,
                 content_type_hint="podcast",
             )
             if tag_slugs is None:
