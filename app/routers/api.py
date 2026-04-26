@@ -6,6 +6,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
 
 from app.models.article import (
     Article,
@@ -236,21 +237,22 @@ async def get_top5():
             .join(ArticleScore)
             .outerjoin(BinaryArticleScore)
             .outerjoin(V4ArticleScore)
+            .options(selectinload(Article.summary))
+            .options(selectinload(Article.tags))
             .where(Article.location != "archive")
             .order_by(ArticleScore.info_score.desc(), ArticleScore.priority_score.desc())
             .limit(5)
         )
-        rows = result.all()
+        rows = result.unique().all()
 
         responses = []
         for article, score, v3_score, v4_score in rows:
-            summary_result = await session.execute(
-                select(Summary).where(Summary.article_id == article.id)
-            )
-            has_summary = summary_result.scalar_one_or_none() is not None
-            tags = await _get_article_tags(session, article.id)
+            has_summary = article.summary is not None
+            tag_slugs = [t.tag_slug for t in article.tags]
             responses.append(
-                await _article_to_response(article, score, has_summary, tags, v3_score, v4_score)
+                await _article_to_response(
+                    article, score, has_summary, tag_slugs, v3_score, v4_score
+                )
             )
 
     return responses
@@ -286,6 +288,8 @@ async def list_articles(
             .join(ArticleScore)
             .outerjoin(BinaryArticleScore)
             .outerjoin(V4ArticleScore)
+            .options(selectinload(Article.summary))
+            .options(selectinload(Article.tags))
         )
         if sort == "v4_score":
             query = query.order_by(V4ArticleScore.info_score.desc().nulls_last())
@@ -320,17 +324,16 @@ async def list_articles(
 
         query = query.offset(skip).limit(limit)
         result = await session.execute(query)
-        rows = result.all()
+        rows = result.unique().all()
 
         responses = []
         for article, score, v3_score, v4_score in rows:
-            summary_result = await session.execute(
-                select(Summary).where(Summary.article_id == article.id)
-            )
-            has_summary = summary_result.scalar_one_or_none() is not None
-            tags = await _get_article_tags(session, article.id)
+            has_summary = article.summary is not None
+            tag_slugs = [t.tag_slug for t in article.tags]
             responses.append(
-                await _article_to_response(article, score, has_summary, tags, v3_score, v4_score)
+                await _article_to_response(
+                    article, score, has_summary, tag_slugs, v3_score, v4_score
+                )
             )
 
     return responses
@@ -346,21 +349,22 @@ async def get_skip_recommended():
             .join(ArticleScore)
             .outerjoin(BinaryArticleScore)
             .outerjoin(V4ArticleScore)
+            .options(selectinload(Article.summary))
+            .options(selectinload(Article.tags))
             .where(ArticleScore.skip_recommended == True)  # noqa: E712
             .where(Article.location != "archive")
             .order_by(ArticleScore.info_score.asc())
         )
-        rows = result.all()
+        rows = result.unique().all()
 
         responses = []
         for article, score, v3_score, v4_score in rows:
-            summary_result = await session.execute(
-                select(Summary).where(Summary.article_id == article.id)
-            )
-            has_summary = summary_result.scalar_one_or_none() is not None
-            tags = await _get_article_tags(session, article.id)
+            has_summary = article.summary is not None
+            tag_slugs = [t.tag_slug for t in article.tags]
             responses.append(
-                await _article_to_response(article, score, has_summary, tags, v3_score, v4_score)
+                await _article_to_response(
+                    article, score, has_summary, tag_slugs, v3_score, v4_score
+                )
             )
 
     return responses

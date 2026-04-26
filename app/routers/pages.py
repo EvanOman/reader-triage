@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
 
 from app.models.article import (
     ApiUsageLog,
@@ -69,6 +70,8 @@ async def dashboard(request: Request):
             .join(ArticleScore)
             .outerjoin(BinaryArticleScore)
             .outerjoin(V4ArticleScore)
+            .options(selectinload(Article.summary))
+            .options(selectinload(Article.tags))
             .where(not_archived)
         )
         if active_sort == "v4_score":
@@ -95,20 +98,13 @@ async def dashboard(request: Request):
         articles_query = articles_query.limit(30)
 
         top_articles_result = await session.execute(articles_query)
-        top_articles_rows = top_articles_result.all()
+        top_articles_rows = top_articles_result.unique().all()
 
         # Build response
         articles = []
         for article, score, v3_score, v4_score in top_articles_rows:
-            summary_result = await session.execute(
-                select(Summary).where(Summary.article_id == article.id)
-            )
-            has_summary = summary_result.scalar_one_or_none() is not None
-
-            tag_result = await session.execute(
-                select(ArticleTag.tag_slug).where(ArticleTag.article_id == article.id)
-            )
-            tag_slugs = [row[0] for row in tag_result.all()]
+            has_summary = article.summary is not None
+            tag_slugs = [t.tag_slug for t in article.tags]
 
             articles.append(
                 {
