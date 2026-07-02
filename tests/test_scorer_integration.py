@@ -22,8 +22,9 @@ from tests.factories import (
     mock_lm_history,
 )
 
-# Default Claude response produces: specificity=17, novelty=25, depth=25, actionability=25 → total=92
-_DEFAULT_TOTAL = 92
+# Default Claude response produces: specificity=17, novelty=25, depth=25, actionability=25
+# → v5-reweighted total = (17 + 25) * 2 = 84
+_DEFAULT_TOTAL = 84
 
 
 # ---------------------------------------------------------------------------
@@ -282,6 +283,40 @@ class TestProcessDocuments:
 
         # get_document should NOT be called (no scoring needed for any version)
         assert "skip-1" not in fake_readwise.get_document_calls
+        assert result.newly_scored == 0
+
+    async def test_v2_categorical_rows_accepted_without_rescore(self, scorer, fake_readwise, deps):
+        """v5-reweighted accepts stored v2-categorical rows (converted by
+        tools/backfill_v5.py arithmetically) — no LLM re-scoring on transition."""
+        sf = deps["session_factory"]
+
+        async with sf() as session:
+            article = Article(
+                id="v2-compat-1",
+                title="Scored Under V2",
+                url="https://example.com/v2compat",
+                author="Author",
+                location="new",
+                category="article",
+            )
+            score = ArticleScore(
+                article_id="v2-compat-1",
+                info_score=80,
+                specificity_score=20,
+                novelty_score=20,
+                depth_score=20,
+                actionability_score=20,
+                scoring_version="v2-categorical",
+            )
+            session.add(article)
+            session.add(score)
+            await session.commit()
+
+        doc = make_document(id="v2-compat-1")
+        meta_doc = replace(doc, content=None)
+        result = await scorer._process_documents([meta_doc])
+
+        assert "v2-compat-1" not in fake_readwise.get_document_calls
         assert result.newly_scored == 0
 
     async def test_old_scoring_version_triggers_rescore(self, scorer, fake_readwise, deps):

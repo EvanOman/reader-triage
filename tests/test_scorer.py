@@ -153,12 +153,33 @@ class TestScoreCalculation:
         assert result.novelty == 8
         assert result.depth == 14
         assert result.actionability == 7
-        assert result.total == 38
+        # v5-reweighted total: (specificity + actionability) * 2
+        assert result.total == 32
 
 
 # ---------------------------------------------------------------------------
 # 2. InfoScore dataclass
 # ---------------------------------------------------------------------------
+
+
+class TestV5Reweighting:
+    """Test the v5-reweighted total and version compatibility."""
+
+    def test_reweight_total_uses_quotability_and_insight_only(self):
+        from app.services.scoring_strategy import reweight_total
+
+        assert reweight_total(25, 25) == 100
+        assert reweight_total(9, 7) == 32
+        assert reweight_total(0, 0) == 0
+
+    def test_v5_accepts_v2_categorical_rows(self):
+        from app.services.scoring_strategy import ReweightedCategoricalScoringStrategy
+
+        strategy = ReweightedCategoricalScoringStrategy.__new__(
+            ReweightedCategoricalScoringStrategy
+        )
+        assert strategy.version == "v5-reweighted"
+        assert strategy.accepted_versions == {"v5-reweighted", "v2-categorical"}
 
 
 class TestInfoScore:

@@ -221,6 +221,16 @@ class ScoringStrategy(Protocol):
         """Scoring version identifier (e.g., 'v2-categorical', 'v3-binary-weighted')."""
         ...
 
+    @property
+    def accepted_versions(self) -> frozenset[str]:
+        """Stored scoring_version values this strategy does NOT need to re-score.
+
+        Normally just {version}. A strategy that only re-aggregates another
+        version's stored subscores can accept that version too, so deploying
+        it does not trigger LLM re-scoring of the whole corpus.
+        """
+        ...
+
     async def score(
         self,
         *,
@@ -282,6 +292,10 @@ class CategoricalScoringStrategy:
     @property
     def version(self) -> str:
         return "v2-categorical"
+
+    @property
+    def accepted_versions(self) -> frozenset[str]:
+        return frozenset({self.version})
 
     async def score(
         self,
@@ -378,6 +392,61 @@ class CategoricalScoringStrategy:
             return None
 
 
+def reweight_total(quotability: int, insight: int) -> int:
+    """v5-reweighted total: only the dimensions that predict highlights.
+
+    Calibration on 80 opened articles (docs/calibration-log.md, July 2026)
+    showed Quotability (ρ=+0.42) and Applicable Insight (ρ=+0.34) predict
+    highlight engagement while Surprise (ρ=+0.21, ns) and Argument (ρ=+0.06)
+    do not. Total = (quotability + insight) * 2, range 0-100.
+    """
+    return (quotability + insight) * 2
+
+
+class ReweightedCategoricalScoringStrategy(CategoricalScoringStrategy):
+    """v5-reweighted scoring strategy.
+
+    Identical LLM call and dimension subscores to v2-categorical; only the
+    total differs (see reweight_total). All four subscores are still stored,
+    so future recalibrations keep their raw material. Existing v2-categorical
+    rows are converted arithmetically by tools/backfill_v5.py — accepting
+    v2-categorical here prevents the sync loop from LLM re-scoring the corpus
+    during the transition.
+    """
+
+    @property
+    def version(self) -> str:
+        return "v5-reweighted"
+
+    @property
+    def accepted_versions(self) -> frozenset[str]:
+        return frozenset({self.version, "v2-categorical"})
+
+    async def score(
+        self,
+        *,
+        title: str,
+        author: str | None,
+        content: str,
+        word_count: int | None,
+        content_type_hint: str,
+        entity_id: str,
+        content_warning: str = "",
+    ) -> InfoScore | None:
+        result = await super().score(
+            title=title,
+            author=author,
+            content=content,
+            word_count=word_count,
+            content_type_hint=content_type_hint,
+            entity_id=entity_id,
+            content_warning=content_warning,
+        )
+        if result is not None:
+            result.total_override = reweight_total(result.specificity, result.actionability)
+        return result
+
+
 class BinaryScoringStrategy:
     """v3-binary scoring strategy.
 
@@ -398,6 +467,10 @@ class BinaryScoringStrategy:
     @property
     def version(self) -> str:
         return "v3-binary"
+
+    @property
+    def accepted_versions(self) -> frozenset[str]:
+        return frozenset({self.version})
 
     async def score(
         self,
@@ -721,6 +794,10 @@ class TieredBinaryScoringStrategy:
     @property
     def version(self) -> str:
         return "v4-binary"
+
+    @property
+    def accepted_versions(self) -> frozenset[str]:
+        return frozenset({self.version})
 
     async def score(
         self,

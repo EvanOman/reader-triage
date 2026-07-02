@@ -32,11 +32,13 @@ just redeploy
 
 ## Scoring Dimensions
 
-Articles are scored 0-100 on four dimensions (25 points each), predicting how likely a reader is to save/highlight passages:
+The LLM rates four dimensions (0-25 each), predicting how likely a reader is to save/highlight passages:
 1. **Quotability** - Specific passages worth saving, striking data, memorable phrasings
 2. **Surprise Factor** - Challenges assumptions, unexpected findings, reframes topics
 3. **Argument Quality** - Well-supported claims, coherent reasoning, strong opinion pieces
 4. **Applicable Insight** - Frameworks, mental models, techniques, perspective shifts
+
+The production total (v5-reweighted, since July 2026) is `(Quotability + Applicable Insight) * 2` (0-100) — calibration showed Surprise and Argument don't predict highlights (see `docs/calibration-log.md`). All four subscores are still stored.
 
 Note: DB columns retain legacy names (`specificity_score`, `novelty_score`, `depth_score`, `actionability_score`).
 

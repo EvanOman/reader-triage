@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 # Current scoring version - bump this when the scoring rubric changes
 # to trigger re-scoring of all articles
-CURRENT_SCORING_VERSION = "v2-categorical"
+CURRENT_SCORING_VERSION = "v5-reweighted"
 
 # Point mappings for categorical responses → numeric scores
 # Quotability bucket (→ specificity_score, 0-25)
@@ -234,12 +234,12 @@ _default_v4_strategy: TieredBinaryScoringStrategy | None = None
 
 
 def _get_default_strategy() -> CategoricalScoringStrategy:
-    """Get or create the default CategoricalScoringStrategy instance."""
+    """Get or create the default scoring strategy (v5-reweighted)."""
     global _default_strategy
     if _default_strategy is None:
-        from app.services.scoring_strategy import CategoricalScoringStrategy
+        from app.services.scoring_strategy import ReweightedCategoricalScoringStrategy
 
-        _default_strategy = CategoricalScoringStrategy()
+        _default_strategy = ReweightedCategoricalScoringStrategy()
     return _default_strategy
 
 
@@ -417,7 +417,7 @@ class ArticleScorer:
                 existing_score = score_result.scalar_one_or_none()
 
                 needs_v2 = existing_score is None or (
-                    existing_score.scoring_version != self._strategy.version
+                    existing_score.scoring_version not in self._strategy.accepted_versions
                 )
 
                 # V3/V4 scoring disabled — V2 is the sole production scorer.
