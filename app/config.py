@@ -19,6 +19,8 @@ class Settings:
     groq_api_key: str
     scoring_model: str
     tagger_model: str
+    public_base_url: str
+    nanobot_bin: str
 
     def __init__(self):
         self.readwise_token = os.environ.get("READWISE_TOKEN", "")
@@ -28,6 +30,11 @@ class Settings:
         self.groq_api_key = os.environ.get("GROQ_API_KEY", "")
         self.scoring_model = os.environ.get("SCORING_MODEL", "openai/gpt-5.4")
         self.tagger_model = os.environ.get("TAGGER_MODEL", "openai/gpt-4.1-mini")
+        # Externally reachable base URL (Tailscale serve) used for digest feedback links
+        self.public_base_url = os.environ.get(
+            "PUBLIC_BASE_URL", "https://omachine.werewolf-universe.ts.net/inbox-monitor"
+        )
+        self.nanobot_bin = os.environ.get("NANOBOT_BIN", os.path.expanduser("~/bin/nanobot"))
 
 
 @lru_cache

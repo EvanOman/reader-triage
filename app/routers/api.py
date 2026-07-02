@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
@@ -14,6 +15,7 @@ from app.models.article import (
     ArticleTag,
     Author,
     BinaryArticleScore,
+    ExposureEvent,
     Summary,
     V4ArticleScore,
     get_session_factory,
@@ -616,3 +618,36 @@ async def toggle_author_favorite(author_id: int, is_favorite: bool = True):
     author_service = get_author_service()
     await author_service.mark_favorite(author_id, is_favorite)
     return {"status": "ok"}
+
+
+_FEEDBACK_PAGE = """<!doctype html>
+<html><head><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reader Triage</title></head>
+<body style="font-family: system-ui; text-align: center; padding-top: 4rem;
+             background: #111; color: #eee;">
+<div style="font-size: 3rem;">{emoji}</div>
+<p>Feedback recorded for<br><strong>{title}</strong></p>
+<p style="color: #888;">You can close this tab.</p>
+</body></html>"""
+
+
+@router.get("/feedback/{exposure_id}/{verdict}", response_class=HTMLResponse)
+async def record_digest_feedback(exposure_id: int, verdict: str) -> HTMLResponse:
+    """Record 👍/👎 feedback for a digest exposure (tapped from a Telegram digest)."""
+    if verdict not in ("up", "down"):
+        raise HTTPException(status_code=400, detail="verdict must be 'up' or 'down'")
+
+    factory = await get_session_factory()
+    async with factory() as session:
+        event = await session.get(ExposureEvent, exposure_id)
+        if event is None:
+            raise HTTPException(status_code=404, detail="Exposure event not found")
+
+        event.feedback = 1 if verdict == "up" else -1
+        event.feedback_at = datetime.now()
+        article = await session.get(Article, event.article_id)
+        title = article.title if article else event.article_id
+        await session.commit()
+
+    emoji = "👍" if verdict == "up" else "👎"
+    return HTMLResponse(_FEEDBACK_PAGE.format(emoji=emoji, title=title))

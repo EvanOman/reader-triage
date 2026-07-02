@@ -118,3 +118,18 @@ cal-dimensions *ARGS:
 
 cal-trends *ARGS:
     uv run python -m tools.calibrate trends {{ARGS}}
+
+# Send daily digest to Telegram (add --dry-run to preview)
+digest *ARGS:
+    uv run python -m tools.send_digest daily {{ARGS}}
+
+# Send weekly roundup to Telegram (add --dry-run to preview)
+roundup *ARGS:
+    uv run python -m tools.send_digest weekly {{ARGS}}
+
+# Install and enable the digest/roundup systemd timers
+install-timers:
+    cp deploy/systemd/reader-triage-digest.* deploy/systemd/reader-triage-roundup.* ~/.config/systemd/user/
+    systemctl --user daemon-reload
+    systemctl --user enable --now reader-triage-digest.timer reader-triage-roundup.timer
+    systemctl --user list-timers 'reader-triage-*' --no-pager

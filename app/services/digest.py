@@ -1,0 +1,300 @@
+"""Daily digest and weekly roundup builders for Telegram distribution.
+
+Selects high-value articles (info_score >= 60), formats Telegram MarkdownV2
+messages with per-item 👍/👎 feedback links, and records every send as an
+ExposureEvent — the ground truth for digest precision.
+"""
+
+import asyncio
+import json
+import logging
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import get_settings
+from app.models.article import Article, ArticleScore, ExposureEvent
+
+logger = logging.getLogger(__name__)
+
+HIGH_VALUE_THRESHOLD = 60.0
+DAILY_CAP = 5
+WEEKLY_CAP = 3
+# Window for "new" articles in the daily digest. Wider than 24h to absorb
+# timestamp skew and late syncs; the per-channel exposure dedup prevents
+# any article from being sent twice.
+DAILY_WINDOW_HOURS = 36
+
+
+def _utcnow() -> datetime:
+    """Naive UTC now, matching SQLite server_default timestamps."""
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+# ---------------------------------------------------------------------------
+# Telegram MarkdownV2 formatting
+# ---------------------------------------------------------------------------
+
+_MDV2_SPECIAL = set("_*[]()~`>#+-=|{}.!")
+
+
+def escape_md(text: str) -> str:
+    """Escape text for Telegram MarkdownV2."""
+    return "".join(f"\\{c}" if c in _MDV2_SPECIAL else c for c in text)
+
+
+def escape_md_url(url: str) -> str:
+    """Escape a URL for use inside a MarkdownV2 inline link target."""
+    return url.replace("\\", "\\\\").replace(")", "\\)")
+
+
+@dataclass
+class DigestItem:
+    """One article entry in a digest message."""
+
+    exposure_id: int
+    article_id: str
+    title: str
+    url: str
+    score: float
+    why: str
+
+
+def one_line_why(score: ArticleScore) -> str:
+    """Extract a one-line 'why this scored' from a score record.
+
+    Prefers the first score_reason (usually the most specific), falling back
+    to the first sentence of the overall assessment.
+    """
+    try:
+        reasons = json.loads(score.score_reasons)
+    except (ValueError, TypeError):
+        reasons = []
+    line = ""
+    if isinstance(reasons, list) and reasons and isinstance(reasons[0], str):
+        line = reasons[0].strip()
+    if not line and score.overall_assessment:
+        line = score.overall_assessment.split(". ")[0].strip()
+    if len(line) > 200:
+        line = line[:197].rstrip() + "..."
+    return line
+
+
+# ---------------------------------------------------------------------------
+# Article selection
+# ---------------------------------------------------------------------------
+
+
+def _already_sent_subquery(channel: str):
+    """Subquery of article IDs already sent on a channel (no repeats)."""
+    return select(ExposureEvent.article_id).where(ExposureEvent.channel == channel)
+
+
+async def select_daily_articles(
+    session: AsyncSession, now: datetime | None = None
+) -> list[tuple[Article, ArticleScore]]:
+    """High-value articles synced in the last day, never sent on the daily channel."""
+    now = now or _utcnow()
+    cutoff = now - timedelta(hours=DAILY_WINDOW_HOURS)
+    result = await session.execute(
+        select(Article, ArticleScore)
+        .join(ArticleScore, ArticleScore.article_id == Article.id)
+        .where(
+            ArticleScore.info_score >= HIGH_VALUE_THRESHOLD,
+            ArticleScore.skip_recommended.is_(False),
+            Article.location != "archive",
+            Article.first_synced_at >= cutoff,
+            Article.id.not_in(_already_sent_subquery("daily")),
+        )
+        .order_by(ArticleScore.info_score.desc())
+        .limit(DAILY_CAP)
+    )
+    return [(row[0], row[1]) for row in result.all()]
+
+
+async def select_weekly_articles(
+    session: AsyncSession, now: datetime | None = None
+) -> list[tuple[Article, ArticleScore]]:
+    """Top unread high-scorers older than a week, never sent on the weekly channel."""
+    now = now or _utcnow()
+    cutoff = now - timedelta(days=7)
+    result = await session.execute(
+        select(Article, ArticleScore)
+        .join(ArticleScore, ArticleScore.article_id == Article.id)
+        .where(
+            ArticleScore.info_score >= HIGH_VALUE_THRESHOLD,
+            ArticleScore.skip_recommended.is_(False),
+            Article.location != "archive",
+            func.coalesce(Article.reading_progress, 0.0) < 0.05,
+            Article.first_synced_at < cutoff,
+            Article.id.not_in(_already_sent_subquery("weekly")),
+        )
+        .order_by(ArticleScore.info_score.desc())
+        .limit(WEEKLY_CAP)
+    )
+    return [(row[0], row[1]) for row in result.all()]
+
+
+async def record_exposures(
+    session: AsyncSession,
+    pairs: list[tuple[Article, ArticleScore]],
+    channel: str,
+) -> list[DigestItem]:
+    """Create ExposureEvent rows (flushed for IDs) and return digest items.
+
+    Caller is responsible for committing only after the message is actually
+    sent, so failed sends leave no exposure records.
+    """
+    items: list[DigestItem] = []
+    for article, score in pairs:
+        event = ExposureEvent(
+            article_id=article.id,
+            score=score.info_score,
+            channel=channel,
+        )
+        session.add(event)
+        await session.flush()
+        items.append(
+            DigestItem(
+                exposure_id=event.id,
+                article_id=article.id,
+                title=article.title or "Untitled",
+                url=article.url,
+                score=score.info_score,
+                why=one_line_why(score),
+            )
+        )
+    return items
+
+
+# ---------------------------------------------------------------------------
+# Pipeline health (for the weekly roundup)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class PipelineHealth:
+    """One-line health stats for the weekly roundup."""
+
+    articles_scored_7d: int
+    exposures_28d: int
+    engaged_28d: int
+
+    @property
+    def precision_line(self) -> str:
+        if self.exposures_28d == 0:
+            return "no digest sends yet"
+        pct = 100.0 * self.engaged_28d / self.exposures_28d
+        return f"digest precision {pct:.0f}% ({self.engaged_28d}/{self.exposures_28d})"
+
+
+async def compute_pipeline_health(
+    session: AsyncSession, now: datetime | None = None
+) -> PipelineHealth:
+    """Compute scoring throughput and digest precision.
+
+    Precision counts a daily-digest exposure as engaged if the article was
+    thumbed up, opened (reading_progress >= 0.1), or highlighted. Never-opened
+    articles are not negatives per se, but for the send-precision metric an
+    unopened send is a wasted slot, so it counts against precision.
+    """
+    now = now or _utcnow()
+    scored_result = await session.execute(
+        select(func.count(ArticleScore.id)).where(ArticleScore.scored_at >= now - timedelta(days=7))
+    )
+    scored_7d = scored_result.scalar() or 0
+
+    exposures_result = await session.execute(
+        select(ExposureEvent, Article)
+        .join(Article, Article.id == ExposureEvent.article_id)
+        .where(
+            ExposureEvent.channel == "daily",
+            ExposureEvent.sent_at >= now - timedelta(days=28),
+        )
+    )
+    rows = exposures_result.all()
+    engaged = 0
+    for event, article in rows:
+        opened = (article.reading_progress or 0.0) >= 0.1
+        highlighted = (article.num_highlights or 0) > 0
+        if event.feedback == 1 or opened or highlighted:
+            engaged += 1
+    return PipelineHealth(
+        articles_scored_7d=scored_7d,
+        exposures_28d=len(rows),
+        engaged_28d=engaged,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Message formatting
+# ---------------------------------------------------------------------------
+
+
+def _format_item(index: int, item: DigestItem, base_url: str) -> str:
+    title_link = f"[{escape_md(item.title)}]({escape_md_url(item.url)})"
+    up_url = escape_md_url(f"{base_url}/api/feedback/{item.exposure_id}/up")
+    down_url = escape_md_url(f"{base_url}/api/feedback/{item.exposure_id}/down")
+    lines = [f"*{index}\\. {title_link}* — {item.score:.0f}"]
+    if item.why:
+        lines.append(f"_{escape_md(item.why)}_")
+    lines.append(f"[👍]({up_url}) · [👎]({down_url})")
+    return "\n".join(lines)
+
+
+def format_daily_message(items: list[DigestItem]) -> str:
+    """Format the daily digest as Telegram MarkdownV2."""
+    base_url = get_settings().public_base_url
+    noun = "article" if len(items) == 1 else "articles"
+    header = f"📚 *Reader Triage daily* — {len(items)} high\\-value {noun}"
+    parts = [header]
+    for i, item in enumerate(items, 1):
+        parts.append(_format_item(i, item, base_url))
+    return "\n\n".join(parts)
+
+
+def format_weekly_message(items: list[DigestItem], health: PipelineHealth) -> str:
+    """Format the weekly roundup as Telegram MarkdownV2."""
+    base_url = get_settings().public_base_url
+    header = "🗓 *Reader Triage weekly* — top unread from the backlog"
+    parts = [header]
+    for i, item in enumerate(items, 1):
+        parts.append(_format_item(i, item, base_url))
+    health_line = (
+        f"Pipeline: {health.articles_scored_7d} articles scored this week, {health.precision_line}"
+    )
+    parts.append(escape_md(health_line))
+    return "\n\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Sending
+# ---------------------------------------------------------------------------
+
+
+async def send_telegram(message: str) -> bool:
+    """Send a message via `nanobot notify -p`. Returns True on success."""
+    nanobot = get_settings().nanobot_bin
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            nanobot,
+            "notify",
+            "-p",
+            message,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        if proc.returncode == 0:
+            return True
+        logger.error(
+            "nanobot notify failed (exit %d): %s",
+            proc.returncode,
+            stderr.decode(errors="replace")[:500],
+        )
+        return False
+    except OSError as e:
+        logger.error("Failed to run nanobot: %s", e)
+        return False

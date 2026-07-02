@@ -247,6 +247,34 @@ class ArticleTag(Base):
     )
 
 
+class ExposureEvent(Base):
+    """A record of an article being sent to the user via a digest channel.
+
+    Ground truth for digest precision: every Telegram send creates one row,
+    and 👍/👎 feedback taps update it.
+    """
+
+    __tablename__ = "exposure_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    article_id: Mapped[str] = mapped_column(String(50), ForeignKey("articles.id"))
+    score: Mapped[float] = mapped_column(Float)  # info_score at send time
+    channel: Mapped[str] = mapped_column(String(20))  # daily, weekly
+    sent_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    # 1 = thumbs up, -1 = thumbs down, NULL = no feedback yet
+    feedback: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    feedback_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # Relationships
+    article: Mapped["Article"] = relationship()
+
+    __table_args__ = (
+        Index("idx_exposure_article", "article_id"),
+        Index("idx_exposure_channel_sent", "channel", "sent_at"),
+    )
+
+
 class ApiUsageLog(Base):
     """Log of Anthropic API usage for cost tracking."""
 
