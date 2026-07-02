@@ -190,13 +190,20 @@ Respond with ONLY a JSON object (no markdown, no extra text):
 {{"q1": <true/false>, "q1_reason": "<brief reason>", "q2": <true/false>, "q2_reason": "<brief reason>", "q3": <true/false>, "q3_reason": "<brief reason>", "q4": <true/false>, "q4_reason": "<brief reason>", "q5": <true/false>, "q5_reason": "<brief reason>", "q6": <true/false>, "q6_reason": "<brief reason>", "q7": <true/false>, "q7_reason": "<brief reason>", "q8": <true/false>, "q8_reason": "<brief reason>", "q9": <true/false>, "q9_reason": "<brief reason>", "q10": <true/false>, "q10_reason": "<brief reason>", "q11": <true/false>, "q11_reason": "<brief reason>", "q12": <true/false>, "q12_reason": "<brief reason>", "q13": <true/false>, "q13_reason": "<brief reason>", "q14": <true/false>, "q14_reason": "<brief reason>", "q15": <true/false>, "q15_reason": "<brief reason>", "q16": <true/false>, "q16_reason": "<brief reason>", "q17": <true/false>, "q17_reason": "<brief reason>", "q18": <true/false>, "q18_reason": "<brief reason>", "q19": <true/false>, "q19_reason": "<brief reason>", "q20": <true/false>, "q20_reason": "<brief reason>", "overall_assessment": "<1-2 sentence summary>"}}"""
 
 
+# OpenAI models that reject temperature != 1.0 (reasoning models + gpt-5 family).
+# They also need a larger max_tokens budget since reasoning tokens count toward it.
+_OPENAI_FIXED_TEMP_MARKERS = ("gpt-5", "o1", "o3", "o4-mini")
+
+
+def _requires_fixed_temperature(model_id: str) -> bool:
+    return any(marker in model_id for marker in _OPENAI_FIXED_TEMP_MARKERS)
+
+
 def _make_lm(model_id: str, max_tokens: int, temperature: float = 0.0) -> dspy.LM:
-    """Create a dspy.LM, adjusting params for OpenAI reasoning models."""
-    try:
-        return dspy.LM(model_id, max_tokens=max_tokens, temperature=temperature)
-    except ValueError:
-        # OpenAI reasoning models require temperature=1.0 and max_tokens >= 16000
+    """Create a dspy.LM, adjusting params for OpenAI reasoning / gpt-5 models."""
+    if _requires_fixed_temperature(model_id):
         return dspy.LM(model_id, max_tokens=max(max_tokens, 16000), temperature=1.0)
+    return dspy.LM(model_id, max_tokens=max_tokens, temperature=temperature)
 
 
 def _strip_json_instruction(prompt: str) -> str:
