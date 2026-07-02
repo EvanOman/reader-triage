@@ -32,6 +32,7 @@ def make_article(
     score: float = 75.0,
     synced_hours_ago: float = 2.0,
     location: str = "new",
+    category: str | None = "article",
     reading_progress: float | None = None,
     num_highlights: int | None = None,
     skip_recommended: bool = False,
@@ -42,6 +43,7 @@ def make_article(
         title=title if title is not None else f"Article {article_id}",
         url=f"https://example.com/{article_id}",
         location=location,
+        category=category,
         reading_progress=reading_progress,
         num_highlights=num_highlights,
         first_synced_at=NOW - timedelta(hours=synced_hours_ago),
@@ -113,6 +115,31 @@ class TestDailySelection:
         await digest_session.commit()
         pairs = await select_daily_articles(digest_session, now=NOW)
         assert [a.id for a, _ in pairs] == ["ok"]
+
+    async def test_excludes_highlight_and_note_categories(self, digest_session):
+        await seed(
+            digest_session,
+            make_article("real-article", score=70),
+            make_article("a-highlight", score=90, category="highlight"),
+            make_article("a-note", score=90, category="note"),
+            make_article("no-category", score=65, category=None),
+        )
+        pairs = await select_daily_articles(digest_session, now=NOW)
+        assert [a.id for a, _ in pairs] == ["real-article", "no-category"]
+
+    async def test_dedupes_same_title_within_batch_and_vs_prior_sends(self, digest_session):
+        await seed(
+            digest_session,
+            make_article("dup-a", score=80, title="Same Piece Twice"),
+            make_article("dup-b", score=75, title="same piece twice"),
+            make_article("resent", score=70, title="Sent Last Week"),
+            make_article("sent-orig", score=90, title="Sent Last Week", synced_hours_ago=500),
+            make_article("fresh", score=65, title="Brand New"),
+        )
+        digest_session.add(ExposureEvent(article_id="sent-orig", score=90, channel="daily"))
+        await digest_session.commit()
+        pairs = await select_daily_articles(digest_session, now=NOW)
+        assert [a.id for a, _ in pairs] == ["dup-a", "fresh"]
 
     async def test_daily_dedup_is_per_channel(self, digest_session):
         await seed(digest_session, make_article("weekly-sent", score=70))

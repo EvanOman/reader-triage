@@ -37,6 +37,9 @@ logger = logging.getLogger(__name__)
 # to trigger re-scoring of all articles
 CURRENT_SCORING_VERSION = "v5-reweighted"
 
+# Readwise document categories that are never scored (user's own passages/notes)
+EXCLUDED_SCORING_CATEGORIES = ("highlight", "note")
+
 # Point mappings for categorical responses → numeric scores
 # Quotability bucket (→ specificity_score, 0-25)
 STANDALONE_SCORES = {"none": 0, "a_few": 9, "several": 17, "many": 25}
@@ -420,6 +423,14 @@ class ArticleScorer:
                     existing_score.scoring_version not in self._strategy.accepted_versions
                 )
 
+                # Readwise "highlight" and "note" documents are the user's own
+                # saved passages, not articles — scoring them is circular
+                # (they are already-captured highlights) and they pollute the
+                # high tier. Store metadata only. Tagger and summarizer join
+                # through ArticleScore, so this gate covers them too.
+                if doc.category in EXCLUDED_SCORING_CATEGORIES:
+                    needs_v2 = False
+
                 # V3/V4 scoring disabled — V2 is the sole production scorer.
                 # Historical V3/V4 data is retained for calibration analysis;
                 # backfill scripts under tools/ still write to those tables.
@@ -476,7 +487,7 @@ class ArticleScorer:
                             existing_score.content_fetch_failed = score.content_fetch_failed
                             existing_score.skip_recommended = skip_recommended
                             existing_score.skip_reason = skip_reason
-                            existing_score.model_used = "claude-sonnet-4-5-20250929"
+                            existing_score.model_used = self._strategy.model_id
                             existing_score.scoring_version = self._strategy.version
                             existing_score.scored_at = datetime.now()
                             existing_score.priority_computed_at = datetime.now()
@@ -505,7 +516,7 @@ class ArticleScorer:
                                 content_fetch_failed=score.content_fetch_failed,
                                 skip_recommended=skip_recommended,
                                 skip_reason=skip_reason,
-                                model_used="claude-sonnet-4-5-20250929",
+                                model_used=self._strategy.model_id,
                                 scoring_version=self._strategy.version,
                                 scored_at=datetime.now(),
                                 priority_computed_at=datetime.now(),
@@ -738,7 +749,7 @@ class ArticleScorer:
                     existing.content_fetch_failed = score.content_fetch_failed
                     existing.skip_recommended = skip_recommended
                     existing.skip_reason = "Low information content" if skip_recommended else None
-                    existing.model_used = "claude-sonnet-4-5-20250929"
+                    existing.model_used = self._strategy.model_id
                     existing.scoring_version = self._strategy.version
                     existing.scored_at = datetime.now()
                     existing.priority_computed_at = datetime.now()

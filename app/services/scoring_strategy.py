@@ -231,6 +231,11 @@ class ScoringStrategy(Protocol):
         """
         ...
 
+    @property
+    def model_id(self) -> str:
+        """LiteLLM model ID used for scoring (without provider prefix)."""
+        ...
+
     async def score(
         self,
         *,
@@ -296,6 +301,10 @@ class CategoricalScoringStrategy:
     @property
     def accepted_versions(self) -> frozenset[str]:
         return frozenset({self.version})
+
+    @property
+    def model_id(self) -> str:
+        return self._model_id.split("/", 1)[-1]
 
     async def score(
         self,
@@ -471,6 +480,10 @@ class BinaryScoringStrategy:
     @property
     def accepted_versions(self) -> frozenset[str]:
         return frozenset({self.version})
+
+    @property
+    def model_id(self) -> str:
+        return self._model_id.split("/", 1)[-1]
 
     async def score(
         self,
@@ -798,6 +811,10 @@ class TieredBinaryScoringStrategy:
     @property
     def accepted_versions(self) -> frozenset[str]:
         return frozenset({self.version})
+
+    @property
+    def model_id(self) -> str:
+        return self._model_id.split("/", 1)[-1]
 
     async def score(
         self,

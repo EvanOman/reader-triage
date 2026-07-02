@@ -27,6 +27,10 @@ WEEKLY_CAP = 3
 # any article from being sent twice.
 DAILY_WINDOW_HOURS = 36
 
+# Readwise document categories that are the user's own saved passages/notes,
+# not articles — never digest material.
+EXCLUDED_CATEGORIES = ("highlight", "note")
+
 
 def _utcnow() -> datetime:
     """Naive UTC now, matching SQLite server_default timestamps."""
@@ -92,6 +96,40 @@ def _already_sent_subquery(channel: str):
     return select(ExposureEvent.article_id).where(ExposureEvent.channel == channel)
 
 
+async def _sent_titles(session: AsyncSession, channel: str) -> set[str]:
+    """Lowercased titles of every article already sent on a channel.
+
+    The same article sometimes gets saved twice under different Readwise IDs;
+    ID-based dedup misses those, so digests also dedupe by title. Scoped per
+    channel: a daily-digested article that stays unread may still resurface
+    in the weekly roundup, matching the ID-level dedup semantics.
+    """
+    result = await session.execute(
+        select(func.lower(Article.title))
+        .join(ExposureEvent, ExposureEvent.article_id == Article.id)
+        .where(ExposureEvent.channel == channel)
+    )
+    return {row[0] for row in result if row[0] and row[0] != "untitled"}
+
+
+def _dedupe_by_title(
+    pairs: list[tuple[Article, ArticleScore]], sent_titles: set[str], cap: int
+) -> list[tuple[Article, ArticleScore]]:
+    """Drop same-title duplicates (within the batch and vs. prior sends)."""
+    seen = set(sent_titles)
+    result: list[tuple[Article, ArticleScore]] = []
+    for article, score in pairs:
+        key = (article.title or "").lower()
+        if key and key != "untitled":
+            if key in seen:
+                continue
+            seen.add(key)
+        result.append((article, score))
+        if len(result) >= cap:
+            break
+    return result
+
+
 async def select_daily_articles(
     session: AsyncSession, now: datetime | None = None
 ) -> list[tuple[Article, ArticleScore]]:
@@ -105,13 +143,15 @@ async def select_daily_articles(
             ArticleScore.info_score >= HIGH_VALUE_THRESHOLD,
             ArticleScore.skip_recommended.is_(False),
             Article.location != "archive",
+            func.coalesce(Article.category, "").not_in(EXCLUDED_CATEGORIES),
             Article.first_synced_at >= cutoff,
             Article.id.not_in(_already_sent_subquery("daily")),
         )
         .order_by(ArticleScore.info_score.desc())
-        .limit(DAILY_CAP)
+        .limit(DAILY_CAP * 3)
     )
-    return [(row[0], row[1]) for row in result.all()]
+    pairs = [(row[0], row[1]) for row in result.all()]
+    return _dedupe_by_title(pairs, await _sent_titles(session, "daily"), DAILY_CAP)
 
 
 async def select_weekly_articles(
@@ -127,14 +167,16 @@ async def select_weekly_articles(
             ArticleScore.info_score >= HIGH_VALUE_THRESHOLD,
             ArticleScore.skip_recommended.is_(False),
             Article.location != "archive",
+            func.coalesce(Article.category, "").not_in(EXCLUDED_CATEGORIES),
             func.coalesce(Article.reading_progress, 0.0) < 0.05,
             Article.first_synced_at < cutoff,
             Article.id.not_in(_already_sent_subquery("weekly")),
         )
         .order_by(ArticleScore.info_score.desc())
-        .limit(WEEKLY_CAP)
+        .limit(WEEKLY_CAP * 3)
     )
-    return [(row[0], row[1]) for row in result.all()]
+    pairs = [(row[0], row[1]) for row in result.all()]
+    return _dedupe_by_title(pairs, await _sent_titles(session, "weekly"), WEEKLY_CAP)
 
 
 async def record_exposures(

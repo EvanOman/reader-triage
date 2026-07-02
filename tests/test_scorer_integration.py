@@ -285,6 +285,27 @@ class TestProcessDocuments:
         assert "skip-1" not in fake_readwise.get_document_calls
         assert result.newly_scored == 0
 
+    async def test_highlight_and_note_documents_not_scored(self, scorer, fake_readwise, deps):
+        """Readwise highlight/note documents get metadata rows but no LLM scoring."""
+        sf = deps["session_factory"]
+        for doc_id, category in [("hl-doc-1", "highlight"), ("note-doc-1", "note")]:
+            doc = make_document(id=doc_id, category=category)
+            fake_readwise.add_document(doc)
+            meta_doc = replace(doc, content=None)
+
+            result = await scorer._process_documents([meta_doc])
+
+            assert result.newly_scored == 0
+            assert doc_id not in fake_readwise.get_document_calls
+            async with sf() as session:
+                assert await session.get(Article, doc_id) is not None
+                score = (
+                    await session.execute(
+                        select(ArticleScore).where(ArticleScore.article_id == doc_id)
+                    )
+                ).scalar_one_or_none()
+                assert score is None
+
     async def test_v2_categorical_rows_accepted_without_rescore(self, scorer, fake_readwise, deps):
         """v5-reweighted accepts stored v2-categorical rows (converted by
         tools/backfill_v5.py arithmetically) — no LLM re-scoring on transition."""
