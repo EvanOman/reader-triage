@@ -38,20 +38,22 @@ def _utcnow() -> datetime:
 
 
 # ---------------------------------------------------------------------------
-# Telegram MarkdownV2 formatting
+# Telegram formatting — nanobot notify -p uses LEGACY parse_mode=Markdown
+# (see ~/dev/nanobot-dashboard/cmd/nanobot/main.go). Legacy Markdown has no
+# backslash escaping (backslashes render literally) and no nested entities
+# (a link inside *bold* breaks parsing). So: minimal styling, sanitize text
+# instead of escaping, bare URLs for article links, and inline links only as
+# standalone 👍/👎 entities.
 # ---------------------------------------------------------------------------
 
-_MDV2_SPECIAL = set("_*[]()~`>#+-=|{}.!")
+_MD_LEGACY_REPLACEMENTS = {"*": "", "_": " ", "[": "(", "]": ")", "`": "'"}
 
 
-def escape_md(text: str) -> str:
-    """Escape text for Telegram MarkdownV2."""
-    return "".join(f"\\{c}" if c in _MDV2_SPECIAL else c for c in text)
-
-
-def escape_md_url(url: str) -> str:
-    """Escape a URL for use inside a MarkdownV2 inline link target."""
-    return url.replace("\\", "\\\\").replace(")", "\\)")
+def sanitize_md(text: str) -> str:
+    """Strip characters that break legacy-Markdown entity parsing."""
+    for char, replacement in _MD_LEGACY_REPLACEMENTS.items():
+        text = text.replace(char, replacement)
+    return text
 
 
 @dataclass
@@ -276,21 +278,21 @@ async def compute_pipeline_health(
 
 
 def _format_item(index: int, item: DigestItem, base_url: str) -> str:
-    title_link = f"[{escape_md(item.title)}]({escape_md_url(item.url)})"
-    up_url = escape_md_url(f"{base_url}/api/feedback/{item.exposure_id}/up")
-    down_url = escape_md_url(f"{base_url}/api/feedback/{item.exposure_id}/down")
-    lines = [f"*{index}\\. {title_link}* — {item.score:.0f}"]
+    up_url = f"{base_url}/api/feedback/{item.exposure_id}/up"
+    down_url = f"{base_url}/api/feedback/{item.exposure_id}/down"
+    lines = [f"{index}. {sanitize_md(item.title)} — {item.score:.0f}"]
     if item.why:
-        lines.append(f"_{escape_md(item.why)}_")
+        lines.append(sanitize_md(item.why))
+    lines.append(item.url)
     lines.append(f"[👍]({up_url}) · [👎]({down_url})")
     return "\n".join(lines)
 
 
 def format_daily_message(items: list[DigestItem]) -> str:
-    """Format the daily digest as Telegram MarkdownV2."""
+    """Format the daily digest as Telegram legacy Markdown."""
     base_url = get_settings().public_base_url
     noun = "article" if len(items) == 1 else "articles"
-    header = f"📚 *Reader Triage daily* — {len(items)} high\\-value {noun}"
+    header = f"*📚 Reader Triage daily — {len(items)} high-value {noun}*"
     parts = [header]
     for i, item in enumerate(items, 1):
         parts.append(_format_item(i, item, base_url))
@@ -298,16 +300,16 @@ def format_daily_message(items: list[DigestItem]) -> str:
 
 
 def format_weekly_message(items: list[DigestItem], health: PipelineHealth) -> str:
-    """Format the weekly roundup as Telegram MarkdownV2."""
+    """Format the weekly roundup as Telegram legacy Markdown."""
     base_url = get_settings().public_base_url
-    header = "🗓 *Reader Triage weekly* — top unread from the backlog"
+    header = "*🗓 Reader Triage weekly — top unread from the backlog*"
     parts = [header]
     for i, item in enumerate(items, 1):
         parts.append(_format_item(i, item, base_url))
     health_line = (
         f"Pipeline: {health.articles_scored_7d} articles scored this week, {health.precision_line}"
     )
-    parts.append(escape_md(health_line))
+    parts.append(sanitize_md(health_line))
     return "\n\n".join(parts)
 
 

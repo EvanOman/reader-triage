@@ -14,11 +14,11 @@ from app.services.digest import (
     DigestItem,
     PipelineHealth,
     compute_pipeline_health,
-    escape_md,
     format_daily_message,
     format_weekly_message,
     one_line_why,
     record_exposures,
+    sanitize_md,
     select_daily_articles,
     select_weekly_articles,
 )
@@ -200,15 +200,15 @@ class TestExposuresAndFormatting:
         )
         assert one_line_why(score) == "First sentence here"
 
-    def test_escape_md(self):
-        assert escape_md("a_b*c[d]") == "a\\_b\\*c\\[d\\]"
+    def test_sanitize_md_strips_legacy_markdown_breakers(self):
+        assert sanitize_md("a_b*c[d]`e") == "a bc(d)'e"
 
     def test_daily_message_contains_links_and_feedback(self):
         items = [
             DigestItem(
                 exposure_id=42,
                 article_id="a1",
-                title="Great Article (2026)",
+                title="Great Article [2026] *bold*",
                 url="https://example.com/a1",
                 score=78.0,
                 why="A sharp claim.",
@@ -217,9 +217,12 @@ class TestExposuresAndFormatting:
         msg = format_daily_message(items)
         assert "78" in msg
         assert "https://example.com/a1" in msg
+        assert "[👍](" in msg
         assert "/api/feedback/42/up" in msg
         assert "/api/feedback/42/down" in msg
-        assert "Great Article \\(2026\\)" in msg
+        # Legacy Markdown: no backslash escapes anywhere, title sanitized
+        assert "\\" not in msg
+        assert "Great Article (2026) bold" in msg
 
     def test_weekly_message_includes_health_line(self):
         health = PipelineHealth(articles_scored_7d=12, exposures_28d=10, engaged_28d=6)
