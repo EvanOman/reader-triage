@@ -66,11 +66,11 @@ scan:
 
 # Tag all untagged articles
 tag:
-    curl -X POST http://localhost:19000/inbox-monitor/api/tag | python -m json.tool
+    curl -X POST http://localhost:19000/api/tag | python -m json.tool
 
 # Re-tag all articles (force)
 retag:
-    curl -X POST "http://localhost:19000/inbox-monitor/api/tag?force=true" | python -m json.tool
+    curl -X POST "http://localhost:19000/api/tag?force=true" | python -m json.tool
 
 # Get top 5 articles
 top5:
