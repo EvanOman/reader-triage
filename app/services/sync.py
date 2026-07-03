@@ -5,6 +5,8 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 
+import httpx
+
 from app.models.article import Article, get_session_factory
 from app.services.readwise import get_readwise_service
 from app.services.scorer import CURRENT_SCORING_VERSION, get_article_scorer
@@ -18,6 +20,9 @@ QUICK_REFRESH_SECONDS = 30
 
 # Full sync: score/summarize/tag new articles every 10 minutes
 FULL_SYNC_SECONDS = 10 * 60
+
+# Alert when sync fails this many times in a row
+FAILURE_ALERT_THRESHOLD = 3
 
 
 def _log_task_exception(task: asyncio.Task) -> None:
@@ -57,6 +62,7 @@ class BackgroundSync:
         self._refresh_lock = asyncio.Lock()
         self._quick_task: asyncio.Task | None = None
         self._full_task: asyncio.Task | None = None
+        self._failure_alert_sent = False
 
     @property
     def status(self) -> SyncStatus:
@@ -116,6 +122,77 @@ class BackgroundSync:
                 logger.exception("Quick refresh failed: %s", e)
                 return 0
 
+    async def _send_failure_alert(self) -> None:
+        """Alert when consecutive sync failures cross the threshold."""
+        from app.config import get_settings
+
+        count = self._status.consecutive_failures
+        error = self._status.last_error or "unknown error"
+        title = f"Sync failing: {count} consecutive failures"
+        body = f"Last error: {error}"
+        severity = "critical" if count >= 6 else "warning"
+
+        settings = get_settings()
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                resp = await client.post(
+                    settings.alert_webhook_url,
+                    json={
+                        "source": "reader-triage",
+                        "severity": severity,
+                        "title": title,
+                        "body": body,
+                        "alert_id": "reader-triage-sync-failure",
+                    },
+                )
+                data = resp.json()
+                if data.get("ok"):
+                    logger.info("Sync failure alert sent via webhook (streak=%d)", count)
+                    self._failure_alert_sent = True
+                    return
+        except Exception as e:
+            logger.warning("Webhook alert failed: %s", e)
+
+        # Fallback to ntfy
+        from app.services.digest import send_ntfy
+
+        if await send_ntfy(f"{title}\n\n{body}", title="Reader Triage: sync failures"):
+            self._failure_alert_sent = True
+        else:
+            logger.error("All alert channels failed for sync failure notification")
+
+    async def _send_failure_recovery(self) -> None:
+        """Send recovery notice when sync succeeds after prior failures."""
+        from app.config import get_settings
+
+        settings = get_settings()
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                resp = await client.post(
+                    settings.alert_webhook_url,
+                    json={
+                        "source": "reader-triage",
+                        "severity": "info",
+                        "title": "Sync recovered",
+                        "body": "Background sync is working again",
+                        "alert_id": "reader-triage-sync-failure",
+                        "resolved": True,
+                    },
+                )
+                data = resp.json()
+                if data.get("ok"):
+                    logger.info("Sync recovery notice sent via webhook")
+                    return
+        except Exception as e:
+            logger.warning("Webhook recovery failed: %s", e)
+
+        from app.services.digest import send_ntfy
+
+        await send_ntfy(
+            "Background sync recovered and is working again",
+            title="Reader Triage: sync recovered",
+        )
+
     async def run_sync(self) -> None:
         """Run a full sync cycle. Uses a lock to prevent concurrent syncs."""
         if self._full_sync_lock.locked():
@@ -135,6 +212,11 @@ class BackgroundSync:
                 self._status.articles_processed = result.total_scanned
                 self._status.newly_scored = result.newly_scored
                 self._status.last_sync_at = datetime.now()
+
+                # Send recovery if we were in a failure streak
+                if self._failure_alert_sent:
+                    await self._send_failure_recovery()
+                    self._failure_alert_sent = False
                 self._status.consecutive_failures = 0
 
                 logger.info(
@@ -172,6 +254,8 @@ class BackgroundSync:
                 logger.exception(
                     "Background sync failed (streak=%d): %s", self._status.consecutive_failures, e
                 )
+                if self._status.consecutive_failures >= FAILURE_ALERT_THRESHOLD:
+                    await self._send_failure_alert()
             finally:
                 self._status.is_syncing = False
 

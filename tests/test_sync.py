@@ -8,6 +8,7 @@ import pytest
 
 from app.models.article import Article
 from app.services.sync import (
+    FAILURE_ALERT_THRESHOLD,
     FULL_SYNC_SECONDS,
     QUICK_REFRESH_SECONDS,
     BackgroundSync,
@@ -788,3 +789,178 @@ class TestSyncLoops:
                 await sync._full_sync_loop()
 
             assert call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# 10. Sync failure alerting
+# ---------------------------------------------------------------------------
+
+
+class TestSyncFailureAlerting:
+    """Test webhook/ntfy alerting when consecutive sync failures cross the threshold."""
+
+    @patch("app.services.sync.get_article_scorer")
+    async def test_alert_sent_after_threshold_failures(self, mock_get_scorer: MagicMock):
+        """Alert should fire when consecutive_failures reaches FAILURE_ALERT_THRESHOLD."""
+        mock_scorer = AsyncMock()
+        mock_scorer.scan_all_documents = AsyncMock(side_effect=RuntimeError("API down"))
+        mock_get_scorer.return_value = mock_scorer
+
+        sync = BackgroundSync()
+
+        with patch.object(sync, "_send_failure_alert", new_callable=AsyncMock) as mock_alert:
+            # Run sync FAILURE_ALERT_THRESHOLD times to cross the threshold
+            for _ in range(FAILURE_ALERT_THRESHOLD):
+                await sync.run_sync()
+
+            mock_alert.assert_awaited_once()
+            assert sync.status.consecutive_failures == FAILURE_ALERT_THRESHOLD
+
+    @patch("app.services.sync.get_article_scorer")
+    async def test_no_alert_below_threshold(self, mock_get_scorer: MagicMock):
+        """No alert should fire when failures are below threshold."""
+        mock_scorer = AsyncMock()
+        mock_scorer.scan_all_documents = AsyncMock(side_effect=RuntimeError("flaky"))
+        mock_get_scorer.return_value = mock_scorer
+
+        sync = BackgroundSync()
+
+        with patch.object(sync, "_send_failure_alert", new_callable=AsyncMock) as mock_alert:
+            for _ in range(FAILURE_ALERT_THRESHOLD - 1):
+                await sync.run_sync()
+
+            mock_alert.assert_not_awaited()
+
+    @patch("app.services.sync.get_tagger")
+    @patch("app.services.sync.get_article_scorer")
+    async def test_recovery_sent_after_success(
+        self, mock_get_scorer: MagicMock, mock_get_tagger: MagicMock
+    ):
+        """Recovery notice should fire when sync succeeds after alert was sent."""
+        mock_scorer = AsyncMock()
+        mock_scorer.scan_all_documents = AsyncMock(
+            return_value=_make_scan_result(total_scanned=5, newly_scored=0)
+        )
+        mock_get_scorer.return_value = mock_scorer
+
+        mock_tagger = AsyncMock()
+        mock_tagger.tag_untagged_articles = AsyncMock(return_value={})
+        mock_get_tagger.return_value = mock_tagger
+
+        sync = BackgroundSync()
+        # Simulate that an alert was previously sent
+        sync._failure_alert_sent = True
+        sync._status.consecutive_failures = 3
+
+        with (
+            patch.object(sync, "_send_failure_recovery", new_callable=AsyncMock) as mock_recovery,
+            patch("app.services.sync.get_summarizer") as mock_summarizer,
+        ):
+            import app.services.vectorstore as vs_mod
+
+            mock_vs = AsyncMock()
+            mock_vs.embed_all_articles = AsyncMock(return_value=0)
+            with patch.object(vs_mod, "get_vectorstore", return_value=mock_vs):
+                await sync.run_sync()
+
+            mock_recovery.assert_awaited_once()
+            assert sync._failure_alert_sent is False
+            assert sync.status.consecutive_failures == 0
+
+    @patch("app.services.sync.get_tagger")
+    @patch("app.services.sync.get_article_scorer")
+    async def test_no_recovery_without_prior_alert(
+        self, mock_get_scorer: MagicMock, mock_get_tagger: MagicMock
+    ):
+        """No recovery should fire if no alert was previously sent."""
+        mock_scorer = AsyncMock()
+        mock_scorer.scan_all_documents = AsyncMock(
+            return_value=_make_scan_result(total_scanned=5, newly_scored=0)
+        )
+        mock_get_scorer.return_value = mock_scorer
+
+        mock_tagger = AsyncMock()
+        mock_tagger.tag_untagged_articles = AsyncMock(return_value={})
+        mock_get_tagger.return_value = mock_tagger
+
+        sync = BackgroundSync()
+        sync._status.consecutive_failures = 1  # Had failures but no alert threshold crossed
+
+        with (
+            patch.object(sync, "_send_failure_recovery", new_callable=AsyncMock) as mock_recovery,
+            patch("app.services.sync.get_summarizer") as mock_summarizer,
+        ):
+            import app.services.vectorstore as vs_mod
+
+            mock_vs = AsyncMock()
+            mock_vs.embed_all_articles = AsyncMock(return_value=0)
+            with patch.object(vs_mod, "get_vectorstore", return_value=mock_vs):
+                await sync.run_sync()
+
+            mock_recovery.assert_not_awaited()
+
+    async def test_webhook_with_ntfy_fallback(self):
+        """When webhook fails, alert should fall back to ntfy."""
+        sync = BackgroundSync()
+        sync._status.consecutive_failures = 3
+        sync._status.last_error = "Connection refused"
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"ok": False, "error": "internal"}
+
+        with (
+            patch("app.services.sync.httpx.AsyncClient") as mock_client_cls,
+            patch("app.services.digest.send_ntfy", return_value=True) as mock_ntfy,
+        ):
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            await sync._send_failure_alert()
+
+            # Webhook was tried but returned ok=false, so ntfy should be called
+            mock_ntfy.assert_awaited_once()
+            assert sync._failure_alert_sent is True
+
+    async def test_webhook_success_skips_ntfy(self):
+        """When webhook succeeds, ntfy should not be called."""
+        sync = BackgroundSync()
+        sync._status.consecutive_failures = 3
+        sync._status.last_error = "Timeout"
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"ok": True, "telegram_sent": True}
+
+        with (
+            patch("app.services.sync.httpx.AsyncClient") as mock_client_cls,
+            patch("app.services.digest.send_ntfy") as mock_ntfy,
+        ):
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            await sync._send_failure_alert()
+
+            mock_ntfy.assert_not_awaited()
+            assert sync._failure_alert_sent is True
+
+    @patch("app.services.sync.get_article_scorer")
+    async def test_alert_fires_on_each_subsequent_failure(self, mock_get_scorer: MagicMock):
+        """Alert should fire on every failure once threshold is crossed."""
+        mock_scorer = AsyncMock()
+        mock_scorer.scan_all_documents = AsyncMock(side_effect=RuntimeError("still down"))
+        mock_get_scorer.return_value = mock_scorer
+
+        sync = BackgroundSync()
+
+        with patch.object(sync, "_send_failure_alert", new_callable=AsyncMock) as mock_alert:
+            # Run past threshold
+            for _ in range(FAILURE_ALERT_THRESHOLD + 2):
+                await sync.run_sync()
+
+            # Should fire on threshold and each subsequent failure
+            assert mock_alert.await_count == 3  # at 3, 4, 5

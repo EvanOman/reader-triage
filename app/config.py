@@ -38,6 +38,10 @@ class Settings:
         # ntfy fallback for digest delivery failures
         self.ntfy_server = os.environ.get("NTFY_SERVER", "https://ntfy.sh")
         self.ntfy_topic = os.environ.get("NTFY_TOPIC", "")
+        # Alert webhook (nanobot) for sync failure notifications
+        self.alert_webhook_url = os.environ.get(
+            "ALERT_WEBHOOK_URL", "http://localhost:18950/alert"
+        )
 
 
 @lru_cache
