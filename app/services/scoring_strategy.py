@@ -397,7 +397,7 @@ class CategoricalScoringStrategy:
                 overall_assessment=output.overall_assessment,
             )
         except Exception as e:
-            logger.error("Error scoring content %s: %s", entity_id, e)
+            logger.exception("Error scoring content %s: %s", entity_id, e)
             return None
 
 
@@ -601,7 +601,7 @@ class BinaryScoringStrategy:
                 total_override=total,
             )
         except Exception as e:
-            logger.error("Error in v3-binary scoring for %s: %s", entity_id, e)
+            logger.exception("Error in v3-binary scoring for %s: %s", entity_id, e)
             return None
 
 
@@ -909,5 +909,5 @@ class TieredBinaryScoringStrategy:
                 total_override=total,
             )
         except Exception as e:
-            logger.error("Error in v4-binary scoring for %s: %s", entity_id, e)
+            logger.exception("Error in v4-binary scoring for %s: %s", entity_id, e)
             return None

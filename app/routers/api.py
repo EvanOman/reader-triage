@@ -110,6 +110,7 @@ class SyncStatusResponse(BaseModel):
     newly_tagged: int
     scoring_version: str
     last_error: str | None
+    consecutive_failures: int = 0
 
 
 class AuthorSyncResponse(BaseModel):
@@ -448,6 +449,7 @@ async def get_sync_status():
         newly_tagged=status.newly_tagged,
         scoring_version=status.scoring_version,
         last_error=status.last_error,
+        consecutive_failures=status.consecutive_failures,
     )
 
 

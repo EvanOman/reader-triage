@@ -20,6 +20,12 @@ QUICK_REFRESH_SECONDS = 30
 FULL_SYNC_SECONDS = 10 * 60
 
 
+def _log_task_exception(task: asyncio.Task) -> None:
+    """Callback for fire-and-forget tasks: log exceptions that would otherwise be lost."""
+    if not task.cancelled() and task.exception():
+        logger.error("Background task %s died: %s", task.get_name(), task.exception())
+
+
 @dataclass
 class SyncStatus:
     """Tracks the state of background sync operations."""
@@ -32,6 +38,7 @@ class SyncStatus:
     newly_tagged: int = 0
     newly_embedded: int = 0
     last_error: str | None = None
+    consecutive_failures: int = 0
     scoring_version: str = field(default_factory=lambda: CURRENT_SCORING_VERSION)
 
 
@@ -128,6 +135,7 @@ class BackgroundSync:
                 self._status.articles_processed = result.total_scanned
                 self._status.newly_scored = result.newly_scored
                 self._status.last_sync_at = datetime.now()
+                self._status.consecutive_failures = 0
 
                 logger.info(
                     "Full sync complete: scanned=%d, newly_scored=%d",
@@ -156,11 +164,14 @@ class BackgroundSync:
                     self._status.newly_embedded = newly_embedded
                     logger.info("Embedded %d new articles", newly_embedded)
                 except Exception as e:
-                    logger.warning("Vector embedding failed (non-fatal): %s", e)
+                    logger.warning("Vector embedding failed (non-fatal): %s", e, exc_info=True)
 
             except Exception as e:
+                self._status.consecutive_failures += 1
                 self._status.last_error = str(e)
-                logger.exception("Background sync failed: %s", e)
+                logger.exception(
+                    "Background sync failed (streak=%d): %s", self._status.consecutive_failures, e
+                )
             finally:
                 self._status.is_syncing = False
 
@@ -185,11 +196,15 @@ class BackgroundSync:
     def start_periodic(self) -> None:
         """Start both periodic sync tasks."""
         if self._quick_task is None or self._quick_task.done():
-            self._quick_task = asyncio.create_task(self._quick_refresh_loop())
+            self._quick_task = asyncio.create_task(
+                self._quick_refresh_loop(), name="quick_refresh_loop"
+            )
+            self._quick_task.add_done_callback(_log_task_exception)
             logger.info("Started quick refresh loop (interval=%ds)", QUICK_REFRESH_SECONDS)
 
         if self._full_task is None or self._full_task.done():
-            self._full_task = asyncio.create_task(self._full_sync_loop())
+            self._full_task = asyncio.create_task(self._full_sync_loop(), name="full_sync_loop")
+            self._full_task.add_done_callback(_log_task_exception)
             logger.info("Started full sync loop (interval=%ds)", FULL_SYNC_SECONDS)
 
     def stop_periodic(self) -> None:
@@ -212,7 +227,8 @@ class BackgroundSync:
         if self._full_sync_lock.locked():
             logger.info("Full sync already in progress, trigger ignored")
             return
-        asyncio.create_task(self.run_sync())
+        task = asyncio.create_task(self.run_sync(), name="triggered_sync")
+        task.add_done_callback(_log_task_exception)
 
 
 # Singleton instance

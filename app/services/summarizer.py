@@ -144,6 +144,7 @@ Respond with ONLY a JSON object in this exact format (no markdown, no extra text
             response = await litellm.acompletion(
                 model=model,
                 max_tokens=500,
+                timeout=120,
                 messages=[{"role": "user", "content": prompt}],
             )
 
@@ -173,7 +174,7 @@ Respond with ONLY a JSON object in this exact format (no markdown, no extra text
                 key_points=data.get("key_points", []),
             )
         except Exception as e:
-            logger.error("Error summarizing article: %s", e)
+            logger.exception("Error summarizing article: %s", e)
             return None
 
 

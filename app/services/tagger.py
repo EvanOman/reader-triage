@@ -270,6 +270,7 @@ async def classify_content(
         response = await litellm.acompletion(
             model=model,
             max_tokens=200,
+            timeout=120,
             messages=[{"role": "user", "content": prompt}],
         )
 
@@ -297,7 +298,7 @@ async def classify_content(
 
         return valid_tags, usage_info
     except Exception as e:
-        logger.error("Error classifying content '%s': %s", title, e)
+        logger.exception("Error classifying content '%s': %s", title, e)
         return None, None
 
 
