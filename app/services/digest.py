@@ -318,6 +318,23 @@ def format_weekly_message(items: list[DigestItem], health: PipelineHealth) -> st
 # ---------------------------------------------------------------------------
 
 
+def check_nanobot_health() -> str | None:
+    """Check that the nanobot binary exists and is executable.
+
+    Returns None on success, or an error description string.
+    """
+    import os
+    import stat
+
+    nanobot = get_settings().nanobot_bin
+    if not os.path.exists(nanobot):
+        return f"nanobot binary not found at {nanobot}"
+    st = os.stat(nanobot)
+    if not st.st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH):
+        return f"nanobot binary at {nanobot} is not executable"
+    return None
+
+
 async def send_telegram(message: str) -> bool:
     """Send a message via `nanobot notify -p`. Returns True on success."""
     nanobot = get_settings().nanobot_bin
@@ -342,3 +359,73 @@ async def send_telegram(message: str) -> bool:
     except OSError as e:
         logger.error("Failed to run nanobot: %s", e)
         return False
+
+
+async def send_ntfy(message: str, *, title: str = "Reader Triage digest") -> bool:
+    """Send a message via ntfy.sh as a fallback delivery channel.
+
+    Returns True on success, False if ntfy is not configured or the send fails.
+    """
+    settings = get_settings()
+    if not settings.ntfy_topic:
+        logger.warning("NTFY_TOPIC not configured — cannot send ntfy fallback")
+        return False
+    url = f"{settings.ntfy_server.rstrip('/')}/{settings.ntfy_topic}"
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "curl",
+            "-s",
+            "-o",
+            "/dev/null",
+            "-w",
+            "%{http_code}",
+            "-H",
+            f"Title: {title}",
+            "-H",
+            "Priority: high",
+            "-H",
+            "Tags: warning",
+            "-d",
+            message,
+            url,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        status = stdout.decode().strip()
+        if proc.returncode == 0 and status.startswith("2"):
+            logger.info("ntfy fallback sent successfully")
+            return True
+        logger.error(
+            "ntfy send failed (curl exit %d, HTTP %s): %s",
+            proc.returncode,
+            status,
+            stderr.decode(errors="replace")[:300],
+        )
+        return False
+    except OSError as e:
+        logger.error("Failed to run curl for ntfy: %s", e)
+        return False
+
+
+async def deliver_digest(message: str) -> bool:
+    """Deliver a digest message, trying nanobot first then ntfy as fallback.
+
+    Returns True if the message was delivered via any channel.
+    """
+    # Pre-flight: warn if nanobot is unhealthy (but still try — it may recover)
+    health_err = check_nanobot_health()
+    if health_err:
+        logger.warning("Nanobot health check failed: %s", health_err)
+
+    if await send_telegram(message):
+        return True
+
+    logger.warning("Primary delivery (nanobot) failed — trying ntfy fallback")
+    # Strip Markdown formatting for ntfy (plain text channel)
+    plain = message.replace("*", "").replace("[", "").replace("]", "")
+    if await send_ntfy(plain, title="Reader Triage digest (nanobot failed)"):
+        return True
+
+    logger.error("All delivery channels failed — digest not sent")
+    return False

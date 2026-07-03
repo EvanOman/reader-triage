@@ -35,6 +35,9 @@ class Settings:
             "PUBLIC_BASE_URL", "https://omachine.werewolf-universe.ts.net/inbox-monitor"
         )
         self.nanobot_bin = os.environ.get("NANOBOT_BIN", os.path.expanduser("~/bin/nanobot"))
+        # ntfy fallback for digest delivery failures
+        self.ntfy_server = os.environ.get("NTFY_SERVER", "https://ntfy.sh")
+        self.ntfy_topic = os.environ.get("NTFY_TOPIC", "")
 
 
 @lru_cache

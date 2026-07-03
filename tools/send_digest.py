@@ -34,14 +34,20 @@ async def run(kind: str, dry_run: bool) -> int:
     """Build and send one digest. Returns a process exit code."""
     from app.models.article import Base, get_engine, get_session_factory
     from app.services.digest import (
+        check_nanobot_health,
         compute_pipeline_health,
+        deliver_digest,
         format_daily_message,
         format_weekly_message,
         record_exposures,
         select_daily_articles,
         select_weekly_articles,
-        send_telegram,
     )
+
+    # Pre-flight health check (logged, non-fatal — delivery will still be attempted)
+    health_err = check_nanobot_health()
+    if health_err:
+        logger.warning("Pre-flight: %s", health_err)
 
     # Ensure the exposure_events table exists without touching FTS
     engine = await get_engine()
@@ -72,9 +78,9 @@ async def run(kind: str, dry_run: bool) -> int:
             print(message)
             return 0
 
-        if not await send_telegram(message):
+        if not await deliver_digest(message):
             await session.rollback()
-            logger.error("Send failed — exposure events rolled back")
+            logger.error("All delivery channels failed — exposure events rolled back")
             return 1
 
         await session.commit()

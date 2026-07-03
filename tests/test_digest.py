@@ -13,7 +13,9 @@ from app.models.article import Article, ArticleScore, Base, ExposureEvent
 from app.services.digest import (
     DigestItem,
     PipelineHealth,
+    check_nanobot_health,
     compute_pipeline_health,
+    deliver_digest,
     format_daily_message,
     format_weekly_message,
     one_line_why,
@@ -21,6 +23,7 @@ from app.services.digest import (
     sanitize_md,
     select_daily_articles,
     select_weekly_articles,
+    send_ntfy,
 )
 
 NOW = datetime(2026, 7, 1, 12, 0, 0)
@@ -368,3 +371,111 @@ class TestFeedbackEndpoint:
 
         resp = await client.get(f"/api/feedback/{exposure_id}/sideways")
         assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Delivery health checks and fallback
+# ---------------------------------------------------------------------------
+
+
+class TestNanobotHealthCheck:
+    def test_healthy_binary(self, tmp_path):
+        binary = tmp_path / "nanobot"
+        binary.write_text("#!/bin/sh\necho ok")
+        binary.chmod(0o755)
+        with patch("app.services.digest.get_settings") as mock_settings:
+            mock_settings.return_value.nanobot_bin = str(binary)
+            assert check_nanobot_health() is None
+
+    def test_missing_binary(self):
+        with patch("app.services.digest.get_settings") as mock_settings:
+            mock_settings.return_value.nanobot_bin = "/nonexistent/nanobot"
+            result = check_nanobot_health()
+            assert result is not None
+            assert "not found" in result
+
+    def test_non_executable_binary(self, tmp_path):
+        binary = tmp_path / "nanobot"
+        binary.write_text("not a real binary")
+        binary.chmod(0o644)
+        with patch("app.services.digest.get_settings") as mock_settings:
+            mock_settings.return_value.nanobot_bin = str(binary)
+            result = check_nanobot_health()
+            assert result is not None
+            assert "not executable" in result
+
+
+class TestNtfyFallback:
+    async def test_sends_via_curl(self):
+        mock_proc = AsyncMock()
+        mock_proc.communicate.return_value = (b"200", b"")
+        mock_proc.returncode = 0
+        with (
+            patch("app.services.digest.get_settings") as mock_settings,
+            patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec,
+        ):
+            mock_settings.return_value.ntfy_server = "https://ntfy.sh"
+            mock_settings.return_value.ntfy_topic = "test-topic"
+            result = await send_ntfy("hello world")
+            assert result is True
+            # Verify curl was called with the right URL
+            call_args = mock_exec.call_args[0]
+            assert "curl" in call_args[0]
+            assert "https://ntfy.sh/test-topic" in call_args
+
+    async def test_skips_when_no_topic_configured(self):
+        with patch("app.services.digest.get_settings") as mock_settings:
+            mock_settings.return_value.ntfy_server = "https://ntfy.sh"
+            mock_settings.return_value.ntfy_topic = ""
+            result = await send_ntfy("hello")
+            assert result is False
+
+    async def test_handles_curl_failure(self):
+        mock_proc = AsyncMock()
+        mock_proc.communicate.return_value = (b"500", b"server error")
+        mock_proc.returncode = 0
+        with (
+            patch("app.services.digest.get_settings") as mock_settings,
+            patch("asyncio.create_subprocess_exec", return_value=mock_proc),
+        ):
+            mock_settings.return_value.ntfy_server = "https://ntfy.sh"
+            mock_settings.return_value.ntfy_topic = "test-topic"
+            result = await send_ntfy("hello")
+            assert result is False
+
+
+class TestDeliverDigest:
+    async def test_succeeds_via_nanobot(self):
+        with (
+            patch("app.services.digest.check_nanobot_health", return_value=None),
+            patch("app.services.digest.send_telegram", return_value=True) as mock_tg,
+            patch("app.services.digest.send_ntfy") as mock_ntfy,
+        ):
+            result = await deliver_digest("test message")
+            assert result is True
+            mock_tg.assert_awaited_once()
+            mock_ntfy.assert_not_awaited()
+
+    async def test_falls_back_to_ntfy_on_nanobot_failure(self):
+        with (
+            patch("app.services.digest.check_nanobot_health", return_value="binary missing"),
+            patch("app.services.digest.send_telegram", return_value=False),
+            patch("app.services.digest.send_ntfy", return_value=True) as mock_ntfy,
+        ):
+            result = await deliver_digest("*bold* [link](url) message")
+            assert result is True
+            mock_ntfy.assert_awaited_once()
+            # Verify Markdown was stripped for ntfy
+            call_args = mock_ntfy.call_args
+            plain_msg = call_args[0][0]
+            assert "*" not in plain_msg
+            assert "[" not in plain_msg
+
+    async def test_returns_false_when_all_channels_fail(self):
+        with (
+            patch("app.services.digest.check_nanobot_health", return_value=None),
+            patch("app.services.digest.send_telegram", return_value=False),
+            patch("app.services.digest.send_ntfy", return_value=False),
+        ):
+            result = await deliver_digest("test")
+            assert result is False
