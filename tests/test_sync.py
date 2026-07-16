@@ -854,7 +854,7 @@ class TestSyncFailureAlerting:
 
         with (
             patch.object(sync, "_send_failure_recovery", new_callable=AsyncMock) as mock_recovery,
-            patch("app.services.sync.get_summarizer") as mock_summarizer,
+            patch("app.services.sync.get_summarizer"),
         ):
             import app.services.vectorstore as vs_mod
 
@@ -888,7 +888,7 @@ class TestSyncFailureAlerting:
 
         with (
             patch.object(sync, "_send_failure_recovery", new_callable=AsyncMock) as mock_recovery,
-            patch("app.services.sync.get_summarizer") as mock_summarizer,
+            patch("app.services.sync.get_summarizer"),
         ):
             import app.services.vectorstore as vs_mod
 
