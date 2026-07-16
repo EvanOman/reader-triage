@@ -272,6 +272,7 @@ async def classify_content(
             max_tokens=200,
             timeout=120,
             messages=[{"role": "user", "content": prompt}],
+            **get_settings().llm_gateway_kwargs(),
         )
 
         choice = response.choices[0]

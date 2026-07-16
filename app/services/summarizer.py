@@ -146,6 +146,7 @@ Respond with ONLY a JSON object in this exact format (no markdown, no extra text
                 max_tokens=500,
                 timeout=120,
                 messages=[{"role": "user", "content": prompt}],
+                **get_settings().llm_gateway_kwargs(),
             )
 
             input_tokens = response.usage.prompt_tokens
