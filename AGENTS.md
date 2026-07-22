@@ -27,7 +27,7 @@ just redeploy
 
 - **Backend:** FastAPI + SQLAlchemy async + aiosqlite
 - **Frontend:** Jinja2 templates + Tailwind CSS (CDN)
-- **AI:** Claude (via Anthropic SDK) for scoring and summarization
+- **AI:** DSPy/LiteLLM for scoring/tagging/summarization; Claude (via Anthropic SDK) for chat. All three route through the local LLM gateway when configured (see Environment Variables).
 - **Data:** readwise-plus package for Readwise Reader API
 
 ## Scoring Dimensions
@@ -64,10 +64,18 @@ Strict typing is enforced via `ty`. Rules:
 
 Configured in `.env`:
 - `READWISE_TOKEN` - Readwise API key
-- `ANTHROPIC_API_KEY` - Claude API key (used by chat only)
-- `OPENAI_API_KEY` - OpenAI API key (used by scoring, tagging, summarization)
+- `ANTHROPIC_API_KEY` - Claude API key (direct-to-Anthropic fallback for chat when the gateway is unset)
+- `OPENAI_API_KEY` - OpenAI API key (direct-to-OpenAI fallback for scoring/tagging/summarization when the gateway is unset)
 - `SCORING_MODEL` - LiteLLM model ID for scoring (default: `openai/gpt-5.4`)
 - `TAGGER_MODEL` - LiteLLM model ID for tagging/summarization (default: `openai/gpt-4.1-mini`)
+- `CHAT_MODEL` - Anthropic model ID for chat (default: `tier-smart`)
 - `DATABASE_URL` - SQLite path (default: ./reader_triage.db)
 - `ROOT_PATH` - URL prefix for reverse proxy (default: empty)
 - `OTLP_ENDPOINT` - OpenTelemetry collector endpoint (default: http://localhost:4317)
+- `LLM_GATEWAY_BASE_URL` / `LLM_GATEWAY_API_KEY` - Local LiteLLM gateway (http://localhost:18400).
+  When both are set, all three model paths (scoring, tagging/summarization, chat) route through
+  the gateway for spend attribution instead of calling providers directly. Use gateway tier
+  aliases for the model env vars above: `openai/tier-{nano,fast,smart,deep}` for
+  `SCORING_MODEL`/`TAGGER_MODEL` (litellm/dspy clients validate model strings client-side and
+  need the `openai/`-prefixed mirror), and bare `tier-{nano,fast,smart,deep}` for `CHAT_MODEL`
+  (Anthropic SDK path).

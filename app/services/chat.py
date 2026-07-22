@@ -9,6 +9,7 @@ from anthropic import AsyncAnthropic
 from anthropic.types import TextDelta, ToolParam, ToolUseBlock
 from sqlalchemy import func, select
 
+from app.config import get_settings
 from app.models.article import (
     Article,
     ArticleScore,
@@ -195,9 +196,17 @@ def _serialize_content_blocks(content_blocks: list) -> list[dict]:
 class ChatService:
     """Service for chatting about articles using Claude with tool use."""
 
-    def __init__(self, chat_model: str = "claude-opus-4-6"):
-        self._client = AsyncAnthropic()  # reads ANTHROPIC_API_KEY from env
-        self._chat_model = chat_model
+    def __init__(self, chat_model: str | None = None):
+        settings = get_settings()
+        # Routes through the gateway (base_url/api_key) when configured;
+        # otherwise falls back to AsyncAnthropic()'s default of reading
+        # ANTHROPIC_API_KEY directly from the environment.
+        gateway_kwargs = settings.anthropic_gateway_kwargs()
+        self._client = AsyncAnthropic(
+            base_url=gateway_kwargs.get("base_url"),
+            api_key=gateway_kwargs.get("api_key"),
+        )
+        self._chat_model = chat_model or settings.chat_model
         self.tool_messages: list[dict] = []
 
     @staticmethod

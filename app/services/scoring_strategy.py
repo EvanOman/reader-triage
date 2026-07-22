@@ -201,9 +201,26 @@ def _requires_fixed_temperature(model_id: str) -> bool:
 
 def _make_lm(model_id: str, max_tokens: int, temperature: float = 0.0) -> dspy.LM:
     """Create a dspy.LM, adjusting params for OpenAI reasoning / gpt-5 models."""
+    from app.config import get_settings
+
+    gateway_kwargs = get_settings().llm_gateway_kwargs()
+    api_base = gateway_kwargs.get("api_base")
+    api_key = gateway_kwargs.get("api_key")
     if _requires_fixed_temperature(model_id):
-        return dspy.LM(model_id, max_tokens=max(max_tokens, 16000), temperature=1.0)
-    return dspy.LM(model_id, max_tokens=max_tokens, temperature=temperature)
+        return dspy.LM(
+            model_id,
+            max_tokens=max(max_tokens, 16000),
+            temperature=1.0,
+            api_base=api_base,
+            api_key=api_key,
+        )
+    return dspy.LM(
+        model_id,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        api_base=api_base,
+        api_key=api_key,
+    )
 
 
 def _strip_json_instruction(prompt: str) -> str:
