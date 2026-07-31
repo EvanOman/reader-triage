@@ -35,7 +35,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from sqlalchemy import ColumnElement
+from sqlalchemy import ColumnElement, SQLColumnExpression
 
 __all__ = [
     "HIGH_VALUE_THRESHOLD",
@@ -137,13 +137,20 @@ def derive_outcome(total: float, author_boost: float = 0.0) -> ScoringOutcome:
     )
 
 
-def tier_criteria(score_total: ColumnElement[float], tier: str) -> tuple[ColumnElement[bool], ...]:
+def tier_criteria(
+    score_total: SQLColumnExpression[int | float], tier: str
+) -> tuple[ColumnElement[bool], ...]:
     """SQL predicates selecting one value tier, for ``.where(*criteria)``.
 
     The same cutoffs as :func:`value_tier`, expressed against a column so
     queries filter in the database instead of re-implementing the bands. An
     unrecognised tier selects nothing, matching the previous behaviour of the
     routers' if/elif chains, which simply left the query unfiltered.
+
+    Takes ``SQLColumnExpression`` rather than ``ColumnElement`` so that both
+    kinds of caller fit: a mapped column such as ``ArticleScore.info_score``
+    (an ``InstrumentedAttribute``) and a computed one such as
+    ``PodcastEpisodeScore.score_total_expr()``.
     """
     if tier == ValueTier.HIGH:
         return (score_total >= HIGH_VALUE_THRESHOLD,)

@@ -14,6 +14,7 @@ import sqlite3
 import pandas as pd
 from scipy.stats import pearsonr, spearmanr
 
+from app.domain.scoring_outcome import HIGH_VALUE_THRESHOLD, MEDIUM_VALUE_THRESHOLD
 from tools.cal_data import _PROJECT_ROOT, fetch_highlights
 
 DB_PATH = _PROJECT_ROOT / "reader_triage.db"
@@ -239,9 +240,9 @@ def main() -> None:
         )
 
         # Tier distribution
-        high = (s >= 60).sum()
-        med = ((s >= 30) & (s < 60)).sum()
-        low = (s < 30).sum()
+        high = (s >= HIGH_VALUE_THRESHOLD).sum()
+        med = ((s >= MEDIUM_VALUE_THRESHOLD) & (s < HIGH_VALUE_THRESHOLD)).sum()
+        low = (s < MEDIUM_VALUE_THRESHOLD).sum()
         n = len(s)
         print(
             f"    Tiers: High {high} ({100 * high / n:.0f}%) | Med {med} ({100 * med / n:.0f}%) | Low {low} ({100 * low / n:.0f}%)"
