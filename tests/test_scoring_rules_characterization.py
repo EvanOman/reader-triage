@@ -38,6 +38,14 @@ Scope: pure rules only. No database, no I/O, no network.
 
 import pytest
 
+from app.domain.scoring_outcome import (
+    ValueTier,
+    derive_outcome,
+    derive_priority,
+    should_skip,
+    skip_reason_for,
+    value_tier,
+)
 from app.models.podcast import PodcastEpisodeScore
 from app.services import digest
 from app.services.scoring_strategy import reweight_total
@@ -110,14 +118,17 @@ class TestPriorityAndSkipDerivation:
         expected_skip: bool,
         expected_reason: str | None,
     ):
-        # The rule, transcribed verbatim from scorer.py:463-465.
-        priority_score = total + author_boost
-        skip_recommended = total < 30
-        skip_reason = "Low information content" if skip_recommended else None
+        outcome = derive_outcome(total, author_boost)
 
-        assert priority_score == pytest.approx(expected_priority)
-        assert skip_recommended is expected_skip
-        assert skip_reason == expected_reason
+        assert outcome.priority_score == pytest.approx(expected_priority)
+        assert outcome.skip_recommended is expected_skip
+        assert outcome.skip_reason == expected_reason
+
+        # The same values via the individual helpers, so a call site that needs
+        # only one of them is covered too.
+        assert derive_priority(total, author_boost) == pytest.approx(expected_priority)
+        assert should_skip(total) is expected_skip
+        assert skip_reason_for(total) == expected_reason
 
     def test_skip_ignores_author_boost_even_when_boost_clears_threshold(self):
         """Pinned: a 0-score article by a favored author is still skip-recommended.
@@ -126,9 +137,10 @@ class TestPriorityAndSkipDerivation:
         applied to the raw total. This is deliberate today; the extraction must
         preserve it.
         """
-        total, author_boost = 0.0, 100.0
-        assert total + author_boost == 100.0
-        assert (total < 30) is True
+        outcome = derive_outcome(0.0, 100.0)
+        assert outcome.priority_score == 100.0
+        assert outcome.skip_recommended is True
+        assert outcome.tier is ValueTier.LOW
 
     def test_recompute_priorities_derives_priority_but_not_skip(self):
         """Pinned asymmetry at app/services/scorer.py:794.
@@ -139,11 +151,9 @@ class TestPriorityAndSkipDerivation:
         author sync. The extracted rule must not silently start re-deriving
         skip here — that would change stored data.
         """
-        info_score, author_boost = 12.0, 25.0
-        new_priority = info_score + author_boost
-        assert new_priority == 37.0
+        assert derive_priority(12.0, 25.0) == 37.0
         # Nothing in recompute_priorities touches skip; the raw total still says skip.
-        assert (info_score < 30) is True
+        assert should_skip(12.0) is True
 
     @pytest.mark.parametrize(
         ("total", "author_boost", "expected_priority", "expected_skip", "expected_reason"),
@@ -157,15 +167,16 @@ class TestPriorityAndSkipDerivation:
         expected_skip: bool,
         expected_reason: str | None,
     ):
-        """tools/backfill_v5.py:57-59 derives the identical values."""
-        # Transcribed verbatim from backfill_v5.py:57-59 (new_total == total).
-        priority_score = total + author_boost
-        skip_recommended = total < 30
-        skip_reason = "Low information content" if skip_recommended else None
+        """tools/backfill_v5.py:57-59 derives the identical values.
 
-        assert priority_score == pytest.approx(expected_priority)
-        assert skip_recommended is expected_skip
-        assert skip_reason == expected_reason
+        Asserting the same table through the same entry point is the point: the
+        backfill and the scorer are no longer free to disagree.
+        """
+        outcome = derive_outcome(total, author_boost)
+
+        assert outcome.priority_score == pytest.approx(expected_priority)
+        assert outcome.skip_recommended is expected_skip
+        assert outcome.skip_reason == expected_reason
 
 
 class TestBackfillHighlightedDivergence:
@@ -201,15 +212,14 @@ class TestBackfillHighlightedDivergence:
         actual_priority: float,
         actual_boost: float,
     ):
-        # Transcribed verbatim from backfill_highlighted.py:122-123.
-        priority_score = float(total)
-        author_boost = 0.0
+        # What backfill_highlighted.py:122-123 produces: the boost it should
+        # have looked up is never passed, so the rule is fed a zero.
+        outcome = derive_outcome(total, 0.0)
 
-        assert priority_score == pytest.approx(actual_priority)
-        assert author_boost == actual_boost
-        # And the divergence itself, stated: canonical would have been higher.
-        canonical_priority = total + dropped_boost
-        assert priority_score == pytest.approx(canonical_priority - dropped_boost)
+        assert outcome.priority_score == pytest.approx(actual_priority)
+        assert outcome.author_boost == actual_boost
+        # And the divergence itself, stated: the boost it should have applied.
+        assert derive_priority(total, dropped_boost) == pytest.approx(total + dropped_boost)
 
     @pytest.mark.parametrize(
         ("total", "expected_skip", "expected_reason"),
@@ -226,12 +236,8 @@ class TestBackfillHighlightedDivergence:
         self, total: float, expected_skip: bool, expected_reason: str | None
     ):
         """Only the priority half diverged; skip/reason are correct here."""
-        # Transcribed verbatim from backfill_highlighted.py:125-126.
-        skip_recommended = total < 30
-        skip_reason = "Low information content" if total < 30 else None
-
-        assert skip_recommended is expected_skip
-        assert skip_reason == expected_reason
+        assert should_skip(total) is expected_skip
+        assert skip_reason_for(total) == expected_reason
 
 
 # ---------------------------------------------------------------------------
@@ -267,6 +273,16 @@ class TestTierLabels:
     @pytest.mark.parametrize(("score", "expected"), TIER_TABLE)
     def test_tier_label_plain(self, score: float, expected: str):
         assert _tier_label_plain(score) == expected
+
+    @pytest.mark.parametrize(("score", "expected"), TIER_TABLE)
+    def test_extracted_value_tier_agrees_with_the_label_helper(self, score: float, expected: str):
+        """The same table through the extracted rule.
+
+        cal_review renders tiers for a human and the routers filter them in SQL;
+        both must agree with :func:`value_tier`, or the review tool and the UI
+        would disagree about the same article.
+        """
+        assert value_tier(score) is ValueTier[expected.upper()]
 
     @pytest.mark.parametrize(("score", "expected"), TIER_TABLE)
     def test_tier_label_colored_wraps_the_same_word(self, score: float, expected: str):
