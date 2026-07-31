@@ -1,0 +1,33 @@
+{
+  "id": "persona-05-non-english",
+  "kind": "non_english",
+  "expectation": "High tier (>= 60). Not skipped. Language must not be penalised: this is a substantive practitioner essay that happens to be in Spanish, and it must outrank the listicle and the newsletter.",
+  "judge_summary": "A Spanish-language practitioner essay on observability cost. Names a framework ('el presupuesto de cardinalidad'), argues a clear contrarian position against dashboard-driven monitoring, and supports it with specific numbers from the author's own platform team. Substantively equivalent in quality to a strong English-language technical essay.",
+  "document": {
+    "title": "El coste oculto de la observabilidad: por que medimos lo que no importa",
+    "author": "Carmen Oliveira",
+    "url": "https://example.com/coste-oculto-observabilidad",
+    "site_name": "example.com",
+    "category": "article",
+    "location": "new",
+    "reading_progress": 0.0,
+    "word_count": 315,
+    "summary": null,
+    "content": "Durante tres anos fui responsable de la plataforma de observabilidad de una empresa de logistica. Cuando llegue teniamos 1.400 paneles. Cuando me fui teniamos 90, y detectabamos las incidencias once minutos antes que con los 1.400.\n\nLa causa no era la herramienta. Era que nadie habia escrito un presupuesto de cardinalidad. Cada equipo anadia etiquetas a sus metricas sin coste percibido, porque el coste no aparecia en su factura sino en la mia. Una sola etiqueta con el identificador de pedido multiplicaba por cuarenta mil las series temporales de un servicio. Pagabamos 38.000 euros al mes por almacenar dimensiones que nadie habia consultado jamas.\n\nEl presupuesto de cardinalidad es simple: cada servicio recibe un numero maximo de series activas, y el equipo decide como gastarlo. No es una restriccion tecnica, es una restriccion economica trasladada a quien toma la decision. En seis meses la cardinalidad total bajo un 70% sin que ningun equipo se quejara, porque por primera vez el coste era visible en el sitio donde se generaba.\n\nAqui viene la parte que suele molestar. La industria insiste en que hay que instrumentarlo todo y decidir despues que mirar. Yo sostengo lo contrario: instrumentar todo es una forma de posponer la pregunta dificil, que es saber que fallo temes de verdad. Un panel que nadie mira durante un trimestre no es una red de seguridad, es deuda con apariencia de diligencia.\n\nLa prueba practica que recomiendo es esta. Coge tus paneles y mira cuales se han abierto en los ultimos noventa dias. Si un panel no se ha abierto, o bien no importa, o bien deberia ser una alerta en lugar de un panel. No hay una tercera opcion. Nosotros aplicamos esa regla y eliminamos el 94% de los paneles en una tarde.\n\nMedir es barato. Decidir que medir es lo caro, y es precisamente el trabajo que la instrumentacion automatica nos permite evitar."
+  },
+  "recorded_scoring_response": {
+    "standalone_passages": "several",
+    "quotability_reason": "Passages worth saving: the 1.400-a-90 paneles opening, the 38.000 euros figure, and the closing 'medir es barato, decidir que medir es lo caro'.",
+    "novel_framing": true,
+    "content_type": "original_analysis",
+    "surprise_reason": "Reframes an observability problem as an economics problem and argues against the instrument-everything consensus.",
+    "author_conviction": true,
+    "practitioner_voice": true,
+    "content_completeness": "complete",
+    "argument_reason": "Three years of first-hand platform ownership with specific figures behind a clearly stated contrarian position.",
+    "named_framework": true,
+    "applicable_ideas": "broadly",
+    "insight_reason": "The cardinality budget and the ninety-day panel test are both directly applicable outside the author's domain.",
+    "overall_assessment": "A strong practitioner essay that names a reusable framework and argues a well-evidenced contrarian position about observability cost."
+  }
+}

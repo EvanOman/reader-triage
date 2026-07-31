@@ -1,0 +1,33 @@
+{
+  "id": "persona-06-already-read",
+  "kind": "already_read",
+  "expectation": "Still scored on its merits (high tier, exactly at the 60 cutoff) but excluded from the surfaced priority ordering because it is archived and 95% read. Scoring a finished item is not wrong; surfacing it again would be.",
+  "judge_summary": "A substantive essay on retrospectives that the reader has already finished and archived (95% read progress, archive location). Good content, but the reader is done with it, so it should not appear in the surfaced ranking.",
+  "document": {
+    "title": "Why Your Retro Is a Status Meeting in Disguise",
+    "author": "Tomas Lindqvist",
+    "url": "https://example.com/retro-status-meeting",
+    "site_name": "example.com",
+    "category": "article",
+    "location": "archive",
+    "reading_progress": 0.95,
+    "word_count": 312,
+    "summary": null,
+    "content": "Most retrospectives I have sat in are status meetings wearing a costume. The tell is the tense. A real retrospective is conducted in the past perfect -- what had already been true before the thing went wrong. A status meeting is conducted in the present continuous -- what we are currently doing about it. Listen for the tense and you will know within ninety seconds which meeting you are actually in.\n\nThe reason this happens is not laziness. It is that the past perfect is socially expensive. Saying 'the on-call rotation had been understaffed for two months before the outage' implicates whoever staffed it, and it implicates everyone who noticed and said nothing. Saying 'we are adding a runbook' implicates no one. Teams drift toward the cheaper sentence, and the drift is invisible because both sentences sound like process improvement.\n\nI do not think the fix is psychological safety training, which has become the answer to every organisational question and has therefore stopped being an answer. The fix I have seen work is narrower: the facilitator writes the timeline before the meeting, in the past perfect, and reads it aloud first. Nobody has to volunteer the expensive sentence, because it is already on the wall. The meeting starts from a shared account of what had been true, and the conversation that follows is about causes rather than about tickets.\n\nThis costs the facilitator about forty minutes of preparation. That is the entire intervention. In three teams that adopted it, the share of retro action items that were process changes rather than one-off tasks went from roughly a fifth to well over half.\n\nIf you want one diagnostic to take away: sit in your next retro and count how many sentences are in the past perfect. If the answer is zero, you are in a status meeting, and the outage will happen again."
+  },
+  "recorded_scoring_response": {
+    "standalone_passages": "several",
+    "quotability_reason": "The tense diagnostic and 'a status meeting wearing a costume' are both saveable; the rest is supporting argument.",
+    "novel_framing": true,
+    "content_type": "opinion_with_evidence",
+    "surprise_reason": "Reframes retrospective failure as a grammatical tell rather than a culture problem.",
+    "author_conviction": true,
+    "practitioner_voice": false,
+    "content_completeness": "complete",
+    "argument_reason": "A clear position argued against the standard psychological-safety answer, with a light observational result behind it.",
+    "named_framework": false,
+    "applicable_ideas": "broadly",
+    "insight_reason": "The past-perfect diagnostic and the pre-written timeline are applicable to anyone who runs a recurring team meeting.",
+    "overall_assessment": "A sharp reframing of why retrospectives fail, with a cheap and concrete intervention the reader could try immediately."
+  }
+}
