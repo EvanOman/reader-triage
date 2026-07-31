@@ -49,6 +49,7 @@ def get_unscored_highlighted_ids() -> list[str]:
 
 
 async def backfill(limit: int, dry_run: bool) -> None:
+    from app.domain.scoring_outcome import derive_outcome
     from app.models.article import ArticleScore, get_session_factory, init_db
     from app.services.readwise import get_readwise_service
     from app.services.scorer import _get_default_strategy
@@ -101,6 +102,14 @@ async def backfill(limit: int, dry_run: bool) -> None:
             failed += 1
             continue
 
+        # KNOWN DIVERGENCE, pinned deliberately: every other write path looks
+        # the author up and derives priority from the boost it earned. This one
+        # passes a zero boost, so rows it writes rank below identical articles
+        # scored elsewhere. Preserved verbatim here so the extraction is a pure
+        # refactor; the zero is now explicit rather than a hardcoded field.
+        # Fixed separately, together with its characterization test.
+        outcome = derive_outcome(result.total, 0.0)
+
         # Save to DB
         async with factory() as session:
             article_score = ArticleScore(
@@ -119,11 +128,11 @@ async def backfill(limit: int, dry_run: bool) -> None:
                     ]
                 ),
                 overall_assessment=result.overall_assessment,
-                priority_score=float(result.total),
-                author_boost=0.0,
+                priority_score=outcome.priority_score,
+                author_boost=outcome.author_boost,
                 content_fetch_failed=result.content_fetch_failed,
-                skip_recommended=result.total < 30,
-                skip_reason="Low information content" if result.total < 30 else None,
+                skip_recommended=outcome.skip_recommended,
+                skip_reason=outcome.skip_reason,
                 model_used="claude-sonnet-4-5-20250929",
                 scoring_version=strategy.version,
                 scored_at=datetime.now(),
