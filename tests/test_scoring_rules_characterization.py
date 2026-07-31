@@ -7,31 +7,30 @@ priority/skip derivation and the 60/30 value-tier cutoffs into one module.
 Read this before changing anything here:
 
 * The expectation tables below ARE the specification. They are written as
-  literal values, never derived by calling the code under test, so that after
-  Phase 3 the *same* tables can be asserted against the extracted module and a
-  divergence is impossible to hide behind a shared helper.
+  literal values, never derived by re-running the expression under test, so a
+  divergence cannot hide behind a shared helper.
 * Any change to a table in this file is a BEHAVIOR CHANGE. It requires a
   deliberate commit that says so — not a drive-by edit while refactoring.
-* Where today's behavior is wrong, it is pinned as-wrong and labeled. See
-  ``TestBackfillHighlightedDivergence`` (author boost silently dropped) and
-  ``TestTierLabelNonFiniteInputs`` (NaN/inf crash instead of "N/A"). Phase 3
-  extracts; it does not fix. Fixing is a separate, deliberate commit that
-  updates the table here in the same change.
+* Where behavior is a rough edge rather than a design, it is pinned as-is and
+  labeled: ``TestTierLabelNonFiniteInputs`` records that a NaN or infinite
+  score crashes the review tool instead of rendering "N/A". Recorded, not
+  fixed; fixing it is a separate, deliberate commit that updates the table
+  here in the same change.
 
-Rule sites this file characterizes (verified July 2026):
+The rule now lives in app/domain/scoring_outcome.py, and these tables assert
+against it. Its callers, all of which used to carry their own copy:
 
-  PRIORITY / SKIP derivation, duplicated in 5 places:
-    app/services/scorer.py:463-465          canonical form
-    app/services/scorer.py:730-731, :751    re-derived identically
-    app/services/scorer.py:794              recompute_priorities, priority only
-    tools/backfill_v5.py:57-59              same rule over reweighted totals
-    tools/backfill_highlighted.py:122-126   DIVERGED — boost hardcoded to 0.0
+  PRIORITY / SKIP derivation:
+    app/services/scorer.py    new-score path, rescore path, and
+                              recompute_priorities (priority only, no skip)
+    tools/backfill_v5.py      same rule over reweighted totals
+    tools/backfill_highlighted.py
 
-  VALUE TIER 60/30 cutoffs, duplicated in 6 blocks:
-    app/routers/podcasts_api.py:253-257, :397-407
-    app/routers/podcasts_pages.py:68-78, :101-105
-    tools/cal_review.py:42-44 (_tier_label), :55-57 (_tier_label_plain)
-    app/services/digest.py:22               only the HIGH threshold is named
+  VALUE TIER 60/30 cutoffs:
+    app/routers/podcasts_api.py    tier filter and the three tier counts
+    app/routers/podcasts_pages.py  the same two shapes
+    tools/cal_review.py            _tier_label and _tier_label_plain
+    app/services/digest.py         re-exports the HIGH cutoff
 
 Scope: pure rules only. No database, no I/O, no network.
 """
@@ -179,21 +178,19 @@ class TestPriorityAndSkipDerivation:
         assert outcome.skip_reason == expected_reason
 
 
-class TestBackfillHighlightedDivergence:
-    """PINNED BUG — tools/backfill_highlighted.py:122-126.
+class TestZeroBoostIsNotSpecial:
+    """A zero boost is just a boost of zero.
 
-    That call site writes ``priority_score=float(result.total)`` with
-    ``author_boost=0.0`` hardcoded, so the author boost is silently dropped for
-    every row it backfills. Its skip derivation is correct.
-
-    This table is the WRONG behavior, recorded on purpose. Phase 3 must extract
-    the rule without changing what this site currently produces; a later,
-    separate commit may fix the site, and must then update this table and say
-    so in the commit message.
+    This table was originally the record of a bug: tools/backfill_highlighted.py
+    hardcoded ``author_boost=0.0``, so rows it wrote lost the boost their author
+    had earned. The tool now looks the boost up, and what is left worth pinning
+    is the arithmetic the fix leans on — feeding the rule a zero yields the bare
+    total, so an article by an unknown author is ranked by its score alone
+    rather than by a special case.
     """
 
-    # (total, author_boost_that_should_have_applied, actual_priority, actual_boost_written)
-    DIVERGED_TABLE = [
+    # (total, boost_if_the_author_were_known, priority_with_zero_boost, boost_written)
+    ZERO_BOOST_TABLE = [
         (29.9, 10.0, 29.9, 0.0),
         (30.0, 10.0, 30.0, 0.0),
         (60.0, 25.0, 60.0, 0.0),
@@ -203,23 +200,24 @@ class TestBackfillHighlightedDivergence:
     ]
 
     @pytest.mark.parametrize(
-        ("total", "dropped_boost", "actual_priority", "actual_boost"), DIVERGED_TABLE
+        ("total", "known_author_boost", "priority_with_zero_boost", "boost_written"),
+        ZERO_BOOST_TABLE,
     )
-    def test_author_boost_is_silently_dropped(
+    def test_zero_boost_leaves_the_total_untouched(
         self,
         total: float,
-        dropped_boost: float,
-        actual_priority: float,
-        actual_boost: float,
+        known_author_boost: float,
+        priority_with_zero_boost: float,
+        boost_written: float,
     ):
-        # What backfill_highlighted.py:122-123 produces: the boost it should
-        # have looked up is never passed, so the rule is fed a zero.
         outcome = derive_outcome(total, 0.0)
 
-        assert outcome.priority_score == pytest.approx(actual_priority)
-        assert outcome.author_boost == actual_boost
-        # And the divergence itself, stated: the boost it should have applied.
-        assert derive_priority(total, dropped_boost) == pytest.approx(total + dropped_boost)
+        assert outcome.priority_score == pytest.approx(priority_with_zero_boost)
+        assert outcome.author_boost == boost_written
+        # And the difference a known author makes, stated.
+        assert derive_priority(total, known_author_boost) == pytest.approx(
+            total + known_author_boost
+        )
 
     @pytest.mark.parametrize(
         ("total", "expected_skip", "expected_reason"),
@@ -235,7 +233,7 @@ class TestBackfillHighlightedDivergence:
     def test_skip_derivation_still_matches_canonical(
         self, total: float, expected_skip: bool, expected_reason: str | None
     ):
-        """Only the priority half diverged; skip/reason are correct here."""
+        """The skip half of the rule, which every caller has always agreed on."""
         assert should_skip(total) is expected_skip
         assert skip_reason_for(total) == expected_reason
 

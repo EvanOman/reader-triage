@@ -52,7 +52,7 @@ async def backfill(limit: int, dry_run: bool) -> None:
     from app.domain.scoring_outcome import derive_outcome
     from app.models.article import ArticleScore, get_session_factory, init_db
     from app.services.readwise import get_readwise_service
-    from app.services.scorer import _get_default_strategy
+    from app.services.scorer import ArticleScorer, _get_default_strategy
 
     await init_db()
     strategy = _get_default_strategy()
@@ -102,16 +102,14 @@ async def backfill(limit: int, dry_run: bool) -> None:
             failed += 1
             continue
 
-        # KNOWN DIVERGENCE, pinned deliberately: every other write path looks
-        # the author up and derives priority from the boost it earned. This one
-        # passes a zero boost, so rows it writes rank below identical articles
-        # scored elsewhere. Preserved verbatim here so the extraction is a pure
-        # refactor; the zero is now explicit rather than a hardcoded field.
-        # Fixed separately, together with its characterization test.
-        outcome = derive_outcome(result.total, 0.0)
-
         # Save to DB
         async with factory() as session:
+            # The boost is looked up here rather than assumed to be zero: a row
+            # written by this tool has to rank alongside rows written by the
+            # scorer, and the scorer's lookup is the only one there is.
+            author_boost = await ArticleScorer()._get_author_boost(session, doc.author)
+            outcome = derive_outcome(result.total, author_boost)
+
             article_score = ArticleScore(
                 article_id=article_id,
                 info_score=result.total,

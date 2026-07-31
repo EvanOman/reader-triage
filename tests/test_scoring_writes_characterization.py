@@ -19,10 +19,10 @@ The priority/skip rule is re-derived independently at five write sites:
   4. tools/backfill_v5.py:57-59      -- arithmetic v2 -> v5 conversion.
      Re-derives priority from the *stored* ``author_boost`` column (it never
      consults the authors table) and re-derives the skip flags.
-  5. tools/backfill_highlighted.py:122-126 -- DIVERGED. Hardcodes
-     ``author_boost=0.0`` and ``priority_score=float(result.total)``, so the
-     author boost is silently dropped. Pinned by
-     ``test_backfill_highlighted_drops_author_boost_CHARACTERIZATION``.
+  5. tools/backfill_highlighted.py -- looks the author's boost up and derives
+     the outcome from it, like every other path. It used to hardcode
+     ``author_boost=0.0``; ``test_backfill_highlighted_applies_author_boost``
+     now asserts the two paths produce the same priority for the same article.
 
 Everything runs against real in-memory SQLite through the real ORM write
 paths and real transactions. The only stand-ins are the collaborators that
@@ -298,33 +298,27 @@ async def _run_backfill_highlighted(
 
 
 # ===========================================================================
-# THE PINNED BUG
+# THE FIXED BUG
 # ===========================================================================
 
 
-async def test_backfill_highlighted_drops_author_boost_CHARACTERIZATION(
+async def test_backfill_highlighted_applies_author_boost(
     session_factory, fake_readwise, strategy, scorer, scorer_deps, tool_db
 ):
-    """PINNED KNOWN BUG -- DO NOT "FIX" THIS TEST.
+    """The two write paths agree. This test used to assert that they did not.
 
-    This test asserts behavior that is WRONG. tools/backfill_highlighted.py
-    (lines 122-126) hardcodes ``author_boost=0.0`` and
-    ``priority_score=float(result.total)``. Every other write path in the
-    system adds the author boost to the priority. So an article backfilled
-    by that tool silently loses the boost its author has earned, and ranks
-    below an identical article that happened to go through the scorer.
+    Until the fix, tools/backfill_highlighted.py hardcoded ``author_boost=0.0``
+    and ``priority_score=float(result.total)``, so an article it backfilled
+    silently lost the boost its author had earned and ranked below an identical
+    article that happened to go through the scorer. This test was written to
+    pin that, named ``..._drops_author_boost_CHARACTERIZATION``, and it asserted
+    the wrong values on purpose so the extraction refactor could be proved
+    behavior-preserving before the behavior was changed.
 
-    The assertions below therefore say ``author_boost == 0.0`` and
-    ``priority_score == result.total`` -- the current, wrong values -- while
-    proving on the same author, in the same database, that the scorer path
-    DOES apply the boost. The gap between the two rows is the bug.
-
-    This is a deliberate pin, not an endorsement. The behavior is changed by
-    the later commit 'fix: apply author boost in backfill_highlighted'. When
-    that commit lands, this test is updated in the SAME commit to assert the
-    corrected values. A failure here at any other time means the extraction
-    refactor changed behavior, and that is the thing to investigate --
-    not this test.
+    The extraction is done and the boost is now looked up, so the assertions
+    below are inverted to the correct values in the same commit that fixed the
+    tool. Both rows are still built here, because the property worth protecting
+    is not "the backfill applies a boost" but "the two paths cannot disagree".
     """
     sf = session_factory
     await _seed_author(sf, BOOSTED_AUTHOR, BOOSTED_AUTHOR_HIGHLIGHTS)
@@ -336,12 +330,12 @@ async def test_backfill_highlighted_drops_author_boost_CHARACTERIZATION(
 
     backfilled = await _one_score(sf, "bug-backfill-1")
 
-    # --- the wrong values, pinned exactly as they are today ---
-    assert backfilled.author_boost == 0.0
-    assert backfilled.priority_score == float(strategy.expected_total)
-    assert backfilled.priority_score == backfilled.info_score
+    # --- the corrected values ---
+    assert backfilled.author_boost == BOOST
+    assert backfilled.priority_score == float(strategy.expected_total) + BOOST
+    assert backfilled.priority_score > backfilled.info_score
 
-    # --- same author, same score, scorer path: the boost IS applied ---
+    # --- same author, same score, scorer path: identical outcome ---
     scorer_doc = make_document(id="bug-scorer-1", author=BOOSTED_AUTHOR)
     await _score_document_via_scorer(scorer, fake_readwise, scorer_doc)
 
@@ -349,10 +343,11 @@ async def test_backfill_highlighted_drops_author_boost_CHARACTERIZATION(
     assert scored.author_boost == BOOST
     assert scored.priority_score == float(strategy.expected_total) + BOOST
 
-    # Two identical articles by the same boosted author, ranked differently
-    # purely because of which code path wrote the row.
+    # The point of the whole exercise: which path wrote the row no longer
+    # changes where the article ranks.
     assert scored.info_score == backfilled.info_score
-    assert scored.priority_score == backfilled.priority_score + BOOST
+    assert scored.priority_score == backfilled.priority_score
+    assert scored.author_boost == backfilled.author_boost
 
 
 # ===========================================================================
@@ -857,12 +852,12 @@ class TestSite4BackfillV5:
 
 
 # ===========================================================================
-# SITE 5 -- tools/backfill_highlighted.py:122-126
+# SITE 5 -- tools/backfill_highlighted.py
 # ===========================================================================
 
 
 class TestSite5BackfillHighlighted:
-    """The diverged write path. See the CHARACTERIZATION test above for the bug."""
+    """Scores articles the reader has highlighted but that were never scored."""
 
     async def test_inserts_a_new_score_row(self, session_factory, fake_readwise, strategy, tool_db):
         sf = session_factory
