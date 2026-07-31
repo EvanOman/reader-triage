@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
+from app.domain.scoring_outcome import ValueTier, tier_criteria
 from app.models.article import get_session_factory
 from app.models.podcast import (
     Podcast,
@@ -249,12 +250,8 @@ async def list_episodes(
             query = query.where(PodcastEpisode.podcast_id == podcast_id)
 
         score_total = PodcastEpisodeScore.score_total_expr()
-        if tier == "high":
-            query = query.where(score_total >= 60)
-        elif tier == "medium":
-            query = query.where(score_total >= 30, score_total < 60)
-        elif tier == "low":
-            query = query.where(score_total < 30)
+        if tier:
+            query = query.where(*tier_criteria(score_total, tier))
 
         if tag:
             query = query.join(PodcastEpisodeTag).where(PodcastEpisodeTag.tag_slug == tag)
@@ -394,17 +391,23 @@ async def podcast_stats():
         scored = scored_result.scalar() or 0
 
         high_result = await session.execute(
-            select(func.count(PodcastEpisodeScore.id)).where(score_total >= 60)
+            select(func.count(PodcastEpisodeScore.id)).where(
+                *tier_criteria(score_total, ValueTier.HIGH)
+            )
         )
         high = high_result.scalar() or 0
 
         medium_result = await session.execute(
-            select(func.count(PodcastEpisodeScore.id)).where(score_total >= 30, score_total < 60)
+            select(func.count(PodcastEpisodeScore.id)).where(
+                *tier_criteria(score_total, ValueTier.MEDIUM)
+            )
         )
         medium = medium_result.scalar() or 0
 
         low_result = await session.execute(
-            select(func.count(PodcastEpisodeScore.id)).where(score_total < 30)
+            select(func.count(PodcastEpisodeScore.id)).where(
+                *tier_criteria(score_total, ValueTier.LOW)
+            )
         )
         low = low_result.scalar() or 0
 
