@@ -15,11 +15,14 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+
+# Re-exported: the digest only ever asks "is this high value?", and the cutoff
+# it asks with is the same one every other value judgement uses.
+from app.domain.scoring_outcome import HIGH_VALUE_THRESHOLD
 from app.models.article import Article, ArticleScore, ExposureEvent
 
 logger = logging.getLogger(__name__)
 
-HIGH_VALUE_THRESHOLD = 60.0
 DAILY_CAP = 5
 WEEKLY_CAP = 3
 # Window for "new" articles in the daily digest. Wider than 24h to absorb
