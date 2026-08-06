@@ -18,6 +18,7 @@ from datetime import datetime
 
 import pandas as pd
 
+from app.domain.scoring_outcome import ValueTier, value_tier
 from tools.cal_data import get_article_details, load_article_content, load_dataset
 
 # ── ANSI color codes ────────────────────────────────────────────────
@@ -33,31 +34,26 @@ RESET = "\033[0m"
 
 # ── Helpers ─────────────────────────────────────────────────────────
 
+# How each tier reads to a human, and the color it renders in. The cutoffs
+# themselves live in app/domain/scoring_outcome.value_tier — this table only
+# decides presentation.
+_TIER_WORDS = {ValueTier.HIGH: "High", ValueTier.MEDIUM: "Medium", ValueTier.LOW: "Low"}
+_TIER_COLORS = {ValueTier.HIGH: GREEN, ValueTier.MEDIUM: YELLOW, ValueTier.LOW: RED}
+
 
 def _tier_label(score: float | int | None) -> str:
     """Return colored tier label for a score."""
     if score is None:
         return f"{DIM}N/A{RESET}"
-    s = int(score)
-    if s >= 60:
-        return f"{GREEN}High{RESET}"
-    elif s >= 30:
-        return f"{YELLOW}Medium{RESET}"
-    else:
-        return f"{RED}Low{RESET}"
+    tier = value_tier(int(score))
+    return f"{_TIER_COLORS[tier]}{_TIER_WORDS[tier]}{RESET}"
 
 
 def _tier_label_plain(score: float | int | None) -> str:
     """Return plain tier label (no color) for a score."""
     if score is None:
         return "N/A"
-    s = int(score)
-    if s >= 60:
-        return "High"
-    elif s >= 30:
-        return "Medium"
-    else:
-        return "Low"
+    return _TIER_WORDS[value_tier(int(score))]
 
 
 def _format_date(val) -> str:

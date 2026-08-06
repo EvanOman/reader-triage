@@ -10,6 +10,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
+from app.domain.scoring_outcome import ValueTier, tier_criteria
 from app.models.article import get_session_factory
 from app.models.podcast import (
     Podcast,
@@ -65,17 +66,23 @@ async def podcasts_dashboard(request: Request):
         total = total_result.scalar() or 0
 
         high_result = await session.execute(
-            select(func.count(PodcastEpisodeScore.id)).where(score_total >= 60)
+            select(func.count(PodcastEpisodeScore.id)).where(
+                *tier_criteria(score_total, ValueTier.HIGH)
+            )
         )
         high = high_result.scalar() or 0
 
         medium_result = await session.execute(
-            select(func.count(PodcastEpisodeScore.id)).where(score_total >= 30, score_total < 60)
+            select(func.count(PodcastEpisodeScore.id)).where(
+                *tier_criteria(score_total, ValueTier.MEDIUM)
+            )
         )
         medium = medium_result.scalar() or 0
 
         low_result = await session.execute(
-            select(func.count(PodcastEpisodeScore.id)).where(score_total < 30)
+            select(func.count(PodcastEpisodeScore.id)).where(
+                *tier_criteria(score_total, ValueTier.LOW)
+            )
         )
         low = low_result.scalar() or 0
 
@@ -97,12 +104,8 @@ async def podcasts_dashboard(request: Request):
                 PodcastEpisodeTag.tag_slug == active_tag
             )
 
-        if active_tier == "high":
-            episodes_query = episodes_query.where(score_total >= 60)
-        elif active_tier == "medium":
-            episodes_query = episodes_query.where(score_total >= 30, score_total < 60)
-        elif active_tier == "low":
-            episodes_query = episodes_query.where(score_total < 30)
+        if active_tier:
+            episodes_query = episodes_query.where(*tier_criteria(score_total, active_tier))
 
         if active_sort == "published":
             episodes_query = episodes_query.order_by(

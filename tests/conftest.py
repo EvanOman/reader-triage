@@ -1,6 +1,7 @@
 """Shared test fixtures for reader_triage tests."""
 
 import os
+import socket
 from datetime import datetime
 
 import pytest
@@ -11,6 +12,29 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite://"
 os.environ.setdefault("READWISE_TOKEN", "test-token")
 os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
+
+# The suite must never reach the network. A live call would either hit Readwise
+# or spend real money on the `inbox-monitor` LiteLLM gateway virtual key
+# (localhost:18400), and a silently-succeeding call makes the whole suite
+# non-deterministic. Fail loudly instead.
+
+
+class NetworkAccessAttempted(RuntimeError):
+    """Raised when test code tries to open a network connection."""
+
+
+_REAL_SOCKET_CONNECT = socket.socket.connect
+_REAL_CREATE_CONNECTION = socket.create_connection
+_REAL_GETADDRINFO = socket.getaddrinfo
+
+
+def _blocked(where: str, address: object) -> NetworkAccessAttempted:
+    return NetworkAccessAttempted(
+        f"Test attempted network access via {where} to {address!r}. "
+        "Tests must be hermetic: use recorded fixtures or a fake collaborator. "
+        "Never let the suite call the LLM gateway or Readwise."
+    )
+
 
 from app.models.article import (  # noqa: E402
     Article,
@@ -26,6 +50,36 @@ from app.models.podcast import (  # noqa: E402
     PodcastEpisodeTag,
 )
 from tests.factories import FakeReadwiseService  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def block_network(monkeypatch):
+    """Fail loudly on any in-process network access.
+
+    Scope note (deliberate, narrow exemption): this guard patches sockets in the
+    *pytest process*. A test that shells out to a subscription-backed CLI (the
+    `persona` tier's judge, via `claude -p`) runs in a separate process and is
+    therefore outside this guard by construction — that is the only sanctioned
+    way for the suite to reach a network at all, and it costs no metered budget
+    because subscription CLIs do not route through the LiteLLM gateway. The
+    guard stays fully armed even in `persona` tests, so inbox_monitor's own
+    scoring calls (the system under test) still cannot reach the gateway.
+    """
+
+    def guarded_connect(self, address):
+        if self.family in (socket.AF_INET, socket.AF_INET6):
+            raise _blocked("socket.connect", address)
+        return _REAL_SOCKET_CONNECT(self, address)
+
+    def guarded_create_connection(address, *args, **kwargs):
+        raise _blocked("socket.create_connection", address)
+
+    def guarded_getaddrinfo(host, port, *args, **kwargs):
+        raise _blocked("socket.getaddrinfo", (host, port))
+
+    monkeypatch.setattr(socket.socket, "connect", guarded_connect)
+    monkeypatch.setattr(socket, "create_connection", guarded_create_connection)
+    monkeypatch.setattr(socket, "getaddrinfo", guarded_getaddrinfo)
 
 
 @pytest.fixture

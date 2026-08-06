@@ -1,0 +1,33 @@
+{
+  "id": "persona-01-technical-deep-dive",
+  "kind": "high_signal_technical",
+  "expectation": "Not skipped. High tier (>= 60). Top of the priority ordering.",
+  "judge_summary": "A senior infrastructure engineer's first-person post-mortem of sharding a Postgres write path. Names a framework (the 'fan-out budget'), quantifies three specific production failures with measured latency numbers, and argues a contrarian position against a popular approach.",
+  "document": {
+    "title": "Sharding the Write Path: Three Failures Nobody Warns You About",
+    "author": "Priya Raghavan",
+    "url": "https://example.com/sharding-write-path",
+    "site_name": "example.com",
+    "category": "article",
+    "location": "new",
+    "reading_progress": 0.0,
+    "word_count": 397,
+    "summary": null,
+    "content": "We sharded our primary Postgres write path last spring. Eighteen months later I can tell you the migration guides are honest about the easy part and silent about the part that actually costs you.\n\nThe first failure is the fan-out budget. Every write that used to touch one node now touches N. Before the migration our p99 insert was 4ms. After, with eight shards and a two-phase commit for cross-shard orders, it was 61ms. Nobody had budgeted for that, because nobody had written the number down. I now insist on a fan-out budget before any sharding proposal: a single line stating how many nodes each write class is allowed to touch, and what the p99 is permitted to become. If you cannot fill in that line, you are not ready to shard.\n\nThe second failure is the rebalance cliff. Consistent hashing promises that adding a shard moves 1/N of the keys. True, and irrelevant. What moves is not the keys but the hot keys, and hot keys are not uniformly distributed. Our ninth shard took 4% of the rows and 31% of the write volume, because the hash landed on a tenant that happened to be a payments processor. We spent six weeks building per-tenant weight overrides that the consistent-hashing literature will tell you are unnecessary.\n\nThe third failure is the one I argue about most. The conventional advice is to shard early, before the data hurts. I now think that is wrong for most teams. Sharding early means sharding on the access pattern you have, and the access pattern you have at 20 engineers is not the one you have at 200. We sharded on customer_id. Two years later the dominant query was cross-customer analytics, and every one of those queries is now a scatter-gather that would have been a single index scan. Vertical scaling bought a competitor of ours four extra years and a better shard key.\n\nHere is the honest summary. Sharding is not a scaling technique. It is a technique for trading a latency problem you can measure for a topology problem you cannot. Take the trade when you have measured both sides. Before you touch a shard key, write down the fan-out budget, name the hot tenants, and state out loud which future query you are making permanently expensive. We did none of those three, and each one cost us a quarter."
+  },
+  "recorded_scoring_response": {
+    "standalone_passages": "many",
+    "quotability_reason": "Multiple standalone passages: the fan-out budget definition, the 4ms-to-61ms figure, and the closing 'trading a latency problem for a topology problem' formulation.",
+    "novel_framing": true,
+    "content_type": "original_analysis",
+    "surprise_reason": "Argues against the widely-repeated 'shard early' advice and reframes sharding as a trade rather than a scaling technique.",
+    "author_conviction": true,
+    "practitioner_voice": true,
+    "content_completeness": "complete",
+    "argument_reason": "First-person production experience with measured numbers, committing to a contrarian recommendation.",
+    "named_framework": true,
+    "applicable_ideas": "broadly",
+    "insight_reason": "The fan-out budget is a concrete, named pre-flight check any team can apply before a sharding decision.",
+    "overall_assessment": "A specific, hard-won practitioner account that names a reusable framework and argues a contrarian position with measured evidence."
+  }
+}

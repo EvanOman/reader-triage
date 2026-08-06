@@ -1,0 +1,33 @@
+{
+  "id": "persona-02-listicle",
+  "kind": "listicle",
+  "expectation": "Low tier (< 30) and skip_recommended True by the score < 30 rule.",
+  "judge_summary": "A generic SEO listicle of editor extensions. No argument, no author position, no framework, nothing a reader could not find on the first page of search results. Each entry is a one-line restatement of the extension's own marketing copy.",
+  "document": {
+    "title": "12 VS Code Extensions Every Developer Needs in 2026",
+    "author": "DevTools Daily Staff",
+    "url": "https://example.com/12-vscode-extensions-2026",
+    "site_name": "example.com",
+    "category": "article",
+    "location": "new",
+    "reading_progress": 0.0,
+    "word_count": 265,
+    "summary": null,
+    "content": "Looking to boost your productivity in 2026? We rounded up the 12 VS Code extensions every developer needs. Let us know in the comments which ones we missed!\n\n1. Prettier. Formats your code automatically so your team stops arguing about semicolons. A must-have.\n\n2. ESLint. Catches problems in your JavaScript before they hit production. Install it today.\n\n3. GitLens. Supercharges the Git capabilities built into VS Code. See who changed what and when.\n\n4. Docker. Makes it easy to build and manage containerized applications right from the editor.\n\n5. Live Share. Collaborate in real time with your teammates. Great for remote pairing.\n\n6. Path Intellisense. Autocompletes filenames. Small, but you will wonder how you lived without it.\n\n7. Better Comments. Color-codes your comments so the important ones stand out.\n\n8. Error Lens. Puts diagnostics inline instead of making you hover. Simple and effective.\n\n9. Thunder Client. A lightweight REST client so you can stop alt-tabbing to another app.\n\n10. Todo Tree. Finds all your TODO comments and puts them in one panel.\n\n11. indent-rainbow. Colors your indentation. Purely cosmetic, but nice to have.\n\n12. Material Icon Theme. Better file icons in the sidebar. Your project tree will thank you.\n\nThat is our list! All twelve of these are free and take under a minute to install. Whether you are a beginner or a seasoned pro, adding a few of these to your setup is one of the easiest wins available. Bookmark this page and check back next year for our updated rankings. And do not forget to subscribe to the newsletter for more developer tips."
+  },
+  "recorded_scoring_response": {
+    "standalone_passages": "a_few",
+    "quotability_reason": "Nothing worth saving beyond the extension names themselves, which are trivially searchable.",
+    "novel_framing": false,
+    "content_type": "news_or_roundup",
+    "surprise_reason": "A roundup of well-known tools with no original angle.",
+    "author_conviction": false,
+    "practitioner_voice": false,
+    "content_completeness": "complete",
+    "argument_reason": "No position is argued; each entry restates the extension's own description.",
+    "named_framework": false,
+    "applicable_ideas": "not_really",
+    "insight_reason": "No idea a reader could carry into their own work beyond installing widely-known extensions.",
+    "overall_assessment": "A generic listicle of popular editor extensions with no original analysis, argument, or applicable framework."
+  }
+}

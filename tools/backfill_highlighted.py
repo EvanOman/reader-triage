@@ -49,9 +49,10 @@ def get_unscored_highlighted_ids() -> list[str]:
 
 
 async def backfill(limit: int, dry_run: bool) -> None:
+    from app.domain.scoring_outcome import derive_outcome
     from app.models.article import ArticleScore, get_session_factory, init_db
     from app.services.readwise import get_readwise_service
-    from app.services.scorer import _get_default_strategy
+    from app.services.scorer import ArticleScorer, _get_default_strategy
 
     await init_db()
     strategy = _get_default_strategy()
@@ -103,6 +104,12 @@ async def backfill(limit: int, dry_run: bool) -> None:
 
         # Save to DB
         async with factory() as session:
+            # The boost is looked up here rather than assumed to be zero: a row
+            # written by this tool has to rank alongside rows written by the
+            # scorer, and the scorer's lookup is the only one there is.
+            author_boost = await ArticleScorer()._get_author_boost(session, doc.author)
+            outcome = derive_outcome(result.total, author_boost)
+
             article_score = ArticleScore(
                 article_id=article_id,
                 info_score=result.total,
@@ -119,11 +126,11 @@ async def backfill(limit: int, dry_run: bool) -> None:
                     ]
                 ),
                 overall_assessment=result.overall_assessment,
-                priority_score=float(result.total),
-                author_boost=0.0,
+                priority_score=outcome.priority_score,
+                author_boost=outcome.author_boost,
                 content_fetch_failed=result.content_fetch_failed,
-                skip_recommended=result.total < 30,
-                skip_reason="Low information content" if result.total < 30 else None,
+                skip_recommended=outcome.skip_recommended,
+                skip_reason=outcome.skip_reason,
                 model_used="claude-sonnet-4-5-20250929",
                 scoring_version=strategy.version,
                 scored_at=datetime.now(),
