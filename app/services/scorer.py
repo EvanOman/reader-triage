@@ -14,6 +14,7 @@ from readwise_sdk.exceptions import RateLimitError
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.scoring_outcome import derive_outcome, derive_priority
 from app.models.article import (
     Article,
     ArticleScore,
@@ -460,9 +461,7 @@ class ArticleScorer:
                     score = await self._score_document(full_doc)
                     if score is not None:
                         author_boost = await self._get_author_boost(session, doc.author)
-                        priority_score = score.total + author_boost
-                        skip_recommended = score.total < 30
-                        skip_reason = "Low information content" if skip_recommended else None
+                        outcome = derive_outcome(score.total, author_boost)
 
                         if existing_score is not None:
                             existing_score.info_score = score.total
@@ -479,14 +478,14 @@ class ArticleScorer:
                                 ]
                             )
                             existing_score.overall_assessment = score.overall_assessment
-                            existing_score.priority_score = priority_score
+                            existing_score.priority_score = outcome.priority_score
                             existing_score.author_boost = author_boost
                             existing_score.priority_signals = json.dumps(
                                 {"author_highlights": author_boost > 0}
                             )
                             existing_score.content_fetch_failed = score.content_fetch_failed
-                            existing_score.skip_recommended = skip_recommended
-                            existing_score.skip_reason = skip_reason
+                            existing_score.skip_recommended = outcome.skip_recommended
+                            existing_score.skip_reason = outcome.skip_reason
                             existing_score.model_used = self._strategy.model_id
                             existing_score.scoring_version = self._strategy.version
                             existing_score.scored_at = datetime.now()
@@ -508,14 +507,14 @@ class ArticleScorer:
                                     ]
                                 ),
                                 overall_assessment=score.overall_assessment,
-                                priority_score=priority_score,
+                                priority_score=outcome.priority_score,
                                 author_boost=author_boost,
                                 priority_signals=json.dumps(
                                     {"author_highlights": author_boost > 0}
                                 ),
                                 content_fetch_failed=score.content_fetch_failed,
-                                skip_recommended=skip_recommended,
-                                skip_reason=skip_reason,
+                                skip_recommended=outcome.skip_recommended,
+                                skip_reason=outcome.skip_reason,
                                 model_used=self._strategy.model_id,
                                 scoring_version=self._strategy.version,
                                 scored_at=datetime.now(),
@@ -727,8 +726,7 @@ class ArticleScorer:
                     author_boost = await self._get_author_boost(
                         session, article.author if article else None
                     )
-                    priority_score = score.total + author_boost
-                    skip_recommended = score.total < 30
+                    outcome = derive_outcome(score.total, author_boost)
 
                     existing.info_score = score.total
                     existing.specificity_score = score.specificity
@@ -744,11 +742,11 @@ class ArticleScorer:
                         ]
                     )
                     existing.overall_assessment = score.overall_assessment
-                    existing.priority_score = priority_score
+                    existing.priority_score = outcome.priority_score
                     existing.author_boost = author_boost
                     existing.content_fetch_failed = score.content_fetch_failed
-                    existing.skip_recommended = skip_recommended
-                    existing.skip_reason = "Low information content" if skip_recommended else None
+                    existing.skip_recommended = outcome.skip_recommended
+                    existing.skip_reason = outcome.skip_reason
                     existing.model_used = self._strategy.model_id
                     existing.scoring_version = self._strategy.version
                     existing.scored_at = datetime.now()
@@ -791,7 +789,10 @@ class ArticleScorer:
                     continue
 
                 author_boost = await self._get_author_boost(session, article.author)
-                new_priority = score.info_score + author_boost
+                # Priority only: this path deliberately does not re-derive
+                # skip_recommended/skip_reason, so stored skip decisions stay
+                # exactly as the scoring run wrote them.
+                new_priority = derive_priority(score.info_score, author_boost)
 
                 if score.priority_score != new_priority or score.author_boost != author_boost:
                     score.priority_score = new_priority

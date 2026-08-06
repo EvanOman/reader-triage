@@ -1,0 +1,20 @@
+{
+  "id": "persona-03-paywalled-stub",
+  "kind": "paywalled_stub",
+  "expectation": "skip_recommended True and content_fetch_failed True. Scored 0 without any LLM call: the pipeline short-circuits when only a summary is available for a document reporting a substantial word count.",
+  "judge_summary": "A paywalled investigative article. Readwise returned no body text at all -- only the subscription teaser -- while reporting 1800 words. There is nothing here to evaluate on its merits.",
+  "document": {
+    "title": "The Contractor Who Billed Three Cities at Once",
+    "author": "The Metro Ledger",
+    "url": "https://example.com/contractor-investigation",
+    "site_name": "example.com",
+    "category": "article",
+    "location": "new",
+    "reading_progress": 0.0,
+    "word_count": 1800,
+    "content": null,
+    "summary": "To continue reading this investigation, subscribe to The Metro Ledger. Members get unlimited access to investigations, data projects, and the weekly briefing."
+  },
+  "recorded_scoring_response": null,
+  "recorded_scoring_note": "Deliberately null. ArticleScorer._score_document detects a stub (no content, reported word_count > 500) and returns a zeroed InfoScore with content_fetch_failed=True before reaching the scoring strategy. The persona test asserts the strategy was never invoked for this document, which is what makes the absence of a recorded response the correct fixture."
+}

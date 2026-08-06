@@ -32,13 +32,29 @@ lint-fix:
 type:
     uv run ty check . --exclude "backtest/*.py" --exclude "tools/cal_*.py" --exclude "tools/embed_articles.py" --exclude "tests/*.py"
 
-# Run tests
+# Run tests (hermetic and deterministic; excludes the persona tier)
 test:
     uv run pytest
 
 # Run tests with coverage report
 test-cov:
     uv run pytest --cov=app --cov-report=term-missing
+
+# Characterization tiers, individually
+test-unit:
+    uv run pytest -m unit
+
+test-integration:
+    uv run pytest -m integration
+
+test-golden:
+    uv run pytest -m golden
+
+# Persona judgement tier. Spawns a subscription-backed `claude -p` judge, so it
+# is non-deterministic and kept out of `just test` and CI. Costs no metered
+# budget: subscription CLIs do not route through the LiteLLM gateway.
+test-persona:
+    uv run pytest -m persona
 
 # FIX + CHECK: Run before every commit
 fc: fmt lint-fix lint type test

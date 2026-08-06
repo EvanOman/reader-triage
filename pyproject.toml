@@ -80,4 +80,14 @@ omit = ["app/migrations/*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-v --tb=short"
+# The default run is deterministic, hermetic and free. `persona` is deselected
+# because it spawns a subscription-backed CLI judge, which makes it
+# non-deterministic and dependent on that CLI being available — not because it
+# costs money (it does not). Run it with `just test-persona`.
+addopts = "-v --tb=short -m 'not persona'"
+markers = [
+    "unit: pure rules and scoring math, no database, no I/O",
+    "integration: real temp/in-memory SQLite and actual write paths",
+    "golden: golden-master comparison of full scored output",
+    "persona: end-to-end judgement over a corpus, judged by a subscription-backed CLI",
+]

@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
+from app.domain.scoring_outcome import ValueTier, tier_criteria
 from app.models.article import (
     Article,
     ArticleScore,
@@ -313,12 +314,8 @@ async def list_articles(
         if tag:
             query = query.join(ArticleTag).where(ArticleTag.tag_slug == tag)
 
-        if tier == "high":
-            query = query.where(ArticleScore.info_score >= 60)
-        elif tier == "medium":
-            query = query.where(ArticleScore.info_score >= 30, ArticleScore.info_score < 60)
-        elif tier == "low":
-            query = query.where(ArticleScore.info_score < 30)
+        if tier:
+            query = query.where(*tier_criteria(ArticleScore.info_score, tier))
 
         if location:
             query = query.where(Article.location == location)
@@ -467,30 +464,27 @@ async def get_stats():
         )
         total = total_result.scalar() or 0
 
-        # High value (>= 60)
         high_result = await session.execute(
             select(func.count(ArticleScore.id))
             .join(Article)
             .where(not_archived)
-            .where(ArticleScore.info_score >= 60)
+            .where(*tier_criteria(ArticleScore.info_score, ValueTier.HIGH))
         )
         high = high_result.scalar() or 0
 
-        # Medium value (30-59)
         medium_result = await session.execute(
             select(func.count(ArticleScore.id))
             .join(Article)
             .where(not_archived)
-            .where(ArticleScore.info_score >= 30, ArticleScore.info_score < 60)
+            .where(*tier_criteria(ArticleScore.info_score, ValueTier.MEDIUM))
         )
         medium = medium_result.scalar() or 0
 
-        # Low value (< 30)
         low_result = await session.execute(
             select(func.count(ArticleScore.id))
             .join(Article)
             .where(not_archived)
-            .where(ArticleScore.info_score < 30)
+            .where(*tier_criteria(ArticleScore.info_score, ValueTier.LOW))
         )
         low = low_result.scalar() or 0
 

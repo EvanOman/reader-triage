@@ -1,0 +1,33 @@
+{
+  "id": "persona-04-newsletter",
+  "kind": "newsletter",
+  "expectation": "Medium tier (30-59). Not skipped. Ranks below the substantive articles and above the listicle.",
+  "judge_summary": "A well-curated weekly finance newsletter. Mostly link-and-comment roundup, but the author writes from desk experience and one section contains a genuinely quotable observation about settlement timing. No framework, and the applicable ideas are narrow to people who work in payments.",
+  "document": {
+    "title": "The Weekly Ledger #212 -- Rates, Rails, and One Good Chart",
+    "author": "Marcus Feld",
+    "url": "https://example.com/weekly-ledger-212",
+    "site_name": "example.com",
+    "category": "email",
+    "location": "new",
+    "reading_progress": 0.0,
+    "word_count": 291,
+    "summary": null,
+    "content": "Welcome back to the Ledger. Short issue this week -- I was on the desk for most of it.\n\nRATES. The curve did the thing everyone said it would not do, which is now the fourth consecutive quarter that consensus has been directionally wrong. I am not going to pretend I called it. Two links worth your time: the Fed's own minutes, and a decent teardown of the December repo squeeze.\n\nRAILS. The instant-payments numbers came out. Volume is up 40% year over year, which every outlet reported, and which tells you almost nothing. The number I actually watch is the share of volume settling after 6pm local. That is where the operational risk lives, because that is when your treasury team is not at their desks and your reconciliation runs unattended. It went from 11% to 19%. Nobody wrote about that.\n\nONE GOOD CHART. Attached: five years of chargeback rates split by merchant category. The travel line is the one to look at.\n\nQUICK HITS. A regional bank got fined for the same control gap for the third time. A stablecoin issuer published reserves a week late and nobody blinked. A payments startup you have heard of quietly turned off its fastest settlement tier, which I read as a funding-cost signal rather than a product decision.\n\nWHAT I AM WATCHING. Whether anyone else starts publishing the after-hours settlement share. If you run a treasury function, pull that number for your own flows this week. It takes twenty minutes and it will either reassure you or ruin your afternoon.\n\nThat is the issue. Reply if you want the chart data as a CSV. As always, nothing here is advice, and I own positions in several of the things I write about."
+  },
+  "recorded_scoring_response": {
+    "standalone_passages": "several",
+    "quotability_reason": "The after-hours settlement observation and the 11%-to-19% figure are worth saving; the rest is link commentary.",
+    "novel_framing": false,
+    "content_type": "informational_summary",
+    "surprise_reason": "Mostly a roundup of the week's items, though the settlement-timing angle is less widely covered.",
+    "author_conviction": false,
+    "practitioner_voice": true,
+    "content_completeness": "complete",
+    "argument_reason": "Written from the desk with real familiarity, but no single position is argued through.",
+    "named_framework": false,
+    "applicable_ideas": "narrowly",
+    "insight_reason": "The suggestion to pull your own after-hours settlement share is actionable, but only for readers running a treasury function.",
+    "overall_assessment": "A competent curated newsletter with one genuinely useful operational observation buried in otherwise routine link commentary."
+  }
+}

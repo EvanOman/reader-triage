@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 async def run(dry_run: bool) -> int:
     from sqlalchemy import select
 
+    from app.domain.scoring_outcome import ValueTier, derive_outcome, value_tier
     from app.models.article import ArticleScore, get_session_factory
     from app.services.scoring_strategy import reweight_total
 
@@ -50,13 +51,16 @@ async def run(dry_run: bool) -> int:
         for score in scores:
             new_total = float(reweight_total(score.specificity_score, score.actionability_score))
             old_total = score.info_score
-            if (old_total >= 60) != (new_total >= 60):
+            # Counts only movement across the High boundary; Medium/Low churn
+            # below it is not a tier change for this report.
+            outcome = derive_outcome(new_total, score.author_boost)
+            if (value_tier(old_total) is ValueTier.HIGH) != (outcome.tier is ValueTier.HIGH):
                 changed_tier += 1
 
             score.info_score = new_total
-            score.priority_score = new_total + score.author_boost
-            score.skip_recommended = new_total < 30
-            score.skip_reason = "Low information content" if new_total < 30 else None
+            score.priority_score = outcome.priority_score
+            score.skip_recommended = outcome.skip_recommended
+            score.skip_reason = outcome.skip_reason
             score.scoring_version = "v5-reweighted"
             score.priority_computed_at = datetime.now()
 
